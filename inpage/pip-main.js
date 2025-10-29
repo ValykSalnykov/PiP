@@ -42,12 +42,12 @@
   const state = {
     pipWindow: null,
     placeholder: null,
-    pipControls: null,
     styleObserver: null,
     styleMirror: null,
     titleObserver: null,
     pipHideHandler: null,
     pipResizeHandler: null,
+    elementResizeObserver: null,
     isRestoring: false,
     openPromise: null,
     restorePromise: null,
@@ -437,11 +437,22 @@
       return restore(trigger);
     }
 
+    disconnectElementResizeObserver();
+
     state.openPromise = (async () => {
       const options = { preferInitialWindowPlacement: true };
-      if (lastKnownSize) {
+      const initialElementSize = mode === 'element' ? getElementPreferredPipSize(element) : null;
+
+      if (initialElementSize) {
+        options.width = initialElementSize.width;
+        options.height = initialElementSize.height;
+      } else if (lastKnownSize) {
         options.width = lastKnownSize.width;
         options.height = lastKnownSize.height;
+      } else {
+        const fallbackSize = getDefaultPipWindowSize();
+        options.width = fallbackSize.width;
+        options.height = fallbackSize.height;
       }
 
       let pipWindow;
@@ -452,6 +463,10 @@
           height: pipWindow.innerHeight,
           mode
         });
+        lastKnownSize = {
+          width: pipWindow.innerWidth,
+          height: pipWindow.innerHeight
+        };
       } catch (error) {
         logger.error('requestWindow failed', error);
         showUnsupportedNotice();
@@ -554,6 +569,21 @@
           pipWindow.focus();
         }
 
+        if (mode === 'element') {
+          queueMicrotask(() => {
+            const activeWindow = state.pipWindow;
+            const target = state.selectedElement;
+            if (!activeWindow || activeWindow.closed || !target) return;
+            resizePipWindowToElement(activeWindow, target);
+            activeWindow.requestAnimationFrame?.(() => {
+              resizePipWindowToElement(activeWindow, target);
+            });
+            attachElementResizeObserver(activeWindow, target);
+          });
+        } else {
+          disconnectElementResizeObserver();
+        }
+
         post({ type: 'PIP_STATE', state: 'open', trigger, mode });
         logger.info('PiP window initialised', { trigger, mode });
       } catch (error) {
@@ -594,11 +624,8 @@
         document.documentElement?.removeAttribute('data-pipx-active');
         body.removeAttribute('data-pipx-state');
 
+        disconnectElementResizeObserver();
         cleanupObservers();
-        if (state.pipControls) {
-          state.pipControls.remove();
-          state.pipControls = null;
-        }
 
         try {
           if (pipWindow && !pipWindow.closed) {
@@ -626,6 +653,7 @@
 
     state.restorePromise = (async () => {
       state.isRestoring = true;
+      disconnectElementResizeObserver();
       const activeMode = state.mode;
       logger.info('Restoring content from PiP', { trigger, mode: activeMode });
 
@@ -672,11 +700,6 @@
 
       body?.removeAttribute('data-pipx-state');
       document.documentElement?.removeAttribute('data-pipx-active');
-
-      if (state.pipControls) {
-        state.pipControls.remove();
-        state.pipControls = null;
-      }
 
       cleanupObservers();
 
@@ -858,37 +881,6 @@
     injectPipStyles(pipDoc);
 
     pipDoc.body.appendChild(fragment);
-
-    const controls = createPipControls(pipDoc);
-    pipDoc.body.appendChild(controls);
-    state.pipControls = controls;
-  }
-
-  function createPipControls(pipDoc) {
-    const controls = pipDoc.createElement('div');
-    controls.id = 'pipx-controls';
-
-    const returnButton = pipDoc.createElement('button');
-    returnButton.type = 'button';
-    returnButton.className = 'pipx-btn';
-    returnButton.textContent = 'Вернуть во вкладку';
-    returnButton.addEventListener('click', () => restore('pip-controls'));
-
-    const reloadButton = pipDoc.createElement('button');
-    reloadButton.type = 'button';
-    reloadButton.className = 'pipx-btn';
-    reloadButton.textContent = 'Обновить';
-    reloadButton.addEventListener('click', () => {
-      try {
-        window.location.reload();
-      } catch (error) {
-        logger.warn('Reload inside PiP failed', error);
-      }
-    });
-
-    controls.appendChild(returnButton);
-    controls.appendChild(reloadButton);
-    return controls;
   }
 
   function injectPipStyles(pipDoc) {
@@ -906,43 +898,6 @@ body.pipx-body {
   overflow: auto;
   margin: 0;
   padding: 0;
-}
-
-#pipx-controls {
-  position: fixed;
-  inset-block-start: 12px;
-  inset-inline-end: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  z-index: 2147483647;
-  pointer-events: none;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-#pipx-controls .pipx-btn {
-  pointer-events: auto;
-  background: rgba(15, 23, 42, 0.86);
-  color: #f8fafc;
-  border: none;
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.3);
-  transition: transform 0.15s ease, background 0.2s ease;
-}
-
-#pipx-controls .pipx-btn:hover {
-  transform: translateY(-1px);
-  background: rgba(37, 99, 235, 0.95);
-}
-
-@media (prefers-color-scheme: light) {
-  #pipx-controls .pipx-btn {
-    background: rgba(29, 78, 216, 0.92);
-  }
 }
 `;
     pipDoc.head.appendChild(style);
@@ -1047,6 +1002,7 @@ body.pipx-body {
   }
 
   function cleanupObservers() {
+    disconnectElementResizeObserver();
     if (state.styleObserver) {
       state.styleObserver.disconnect();
       state.styleObserver = null;
@@ -1197,5 +1153,97 @@ body.pipx-body {
       ? '.' + Array.from(element.classList).slice(0, 3).join('.')
       : '';
     return `${tag}${id}${classList}`;
+  }
+
+  function getElementPreferredPipSize(element) {
+    if (!element || typeof element.getBoundingClientRect !== 'function') return null;
+    try {
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        return null;
+      }
+      return clampPipWindowSize(rect.width, rect.height);
+    } catch (error) {
+      logger.warn('Unable to calculate element size for PiP window', error);
+      return null;
+    }
+  }
+
+  function clampPipWindowSize(width, height) {
+    const MIN_WIDTH = 80;
+    const MIN_HEIGHT = 60;
+    const screenWidth = window.screen?.availWidth ?? 1920;
+    const screenHeight = window.screen?.availHeight ?? 1080;
+    const MAX_WIDTH = Math.max(MIN_WIDTH, Math.min(screenWidth, 1920));
+    const MAX_HEIGHT = Math.max(MIN_HEIGHT, Math.min(screenHeight, 1200));
+
+    const safeWidth = Number.isFinite(width) && width > 0 ? width : 640;
+    const safeHeight = Number.isFinite(height) && height > 0 ? height : 360;
+
+    return {
+      width: Math.round(Math.min(Math.max(safeWidth, MIN_WIDTH), MAX_WIDTH)),
+      height: Math.round(Math.min(Math.max(safeHeight, MIN_HEIGHT), MAX_HEIGHT))
+    };
+  }
+
+  function getDefaultPipWindowSize() {
+    const baseWidth = window.innerWidth ? window.innerWidth * 0.6 : 640;
+    const baseHeight = window.innerHeight ? window.innerHeight * 0.6 : 360;
+    return clampPipWindowSize(baseWidth, baseHeight);
+  }
+
+  function resizePipWindowToElement(pipWindow, element) {
+    if (!pipWindow || pipWindow.closed || !element) return;
+    try {
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const { width, height } = clampPipWindowSize(rect.width, rect.height);
+      if (
+        lastKnownSize &&
+        Math.abs(lastKnownSize.width - width) <= 1 &&
+        Math.abs(lastKnownSize.height - height) <= 1
+      ) {
+        return;
+      }
+      if (typeof pipWindow.resizeTo === 'function') {
+        pipWindow.resizeTo(width, height);
+      }
+      lastKnownSize = { width, height };
+      logger.debug('Adjusted PiP window to match element', { width, height });
+    } catch (error) {
+      logger.warn('Failed to resize PiP window to match element', error);
+    }
+  }
+
+  function attachElementResizeObserver(pipWindow, element) {
+    disconnectElementResizeObserver();
+    if (!pipWindow || pipWindow.closed || !element) return;
+
+    const ResizeObserverCtor = pipWindow.ResizeObserver || window.ResizeObserver;
+    if (typeof ResizeObserverCtor !== 'function') {
+      logger.debug('ResizeObserver unavailable — skipping automatic PiP resizing');
+      return;
+    }
+
+    try {
+      const observer = new ResizeObserverCtor(() => {
+        resizePipWindowToElement(pipWindow, element);
+      });
+      observer.observe(element);
+      state.elementResizeObserver = observer;
+    } catch (error) {
+      logger.warn('Unable to attach ResizeObserver for PiP element', error);
+    }
+  }
+
+  function disconnectElementResizeObserver() {
+    const observer = state.elementResizeObserver;
+    if (!observer) return;
+    try {
+      observer.disconnect();
+    } catch (error) {
+      logger.warn('Failed to disconnect element ResizeObserver', error);
+    }
+    state.elementResizeObserver = null;
   }
 })();

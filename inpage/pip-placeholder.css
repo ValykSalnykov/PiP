@@ -1,0 +1,120 @@
+body[data-pipx-state="placeholder"] {
+  margin: 0 !important;
+  min-height: 100vh;
+}
+
+#pipx-placeholder {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  width: 100%;
+  padding: clamp(24px, 6vw, 72px);
+  background:
+    radial-gradient(120% 120% at 50% 0%, rgba(59, 130, 246, 0.12), rgba(15, 23, 42, 0)) #f8fafc;
+  color: #0f172a;
+  text-align: center;
+  gap: 32px;
+  box-sizing: border-box;
+  isolation: isolate;
+  z-index: 2147483000;
+}
+
+#pipx-placeholder * {
+  font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  box-sizing: border-box;
+}
+
+#pipx-placeholder .pipx-card {
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 24px;
+  padding: clamp(24px, 4vw, 40px);
+  max-width: min(520px, 90vw);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.15);
+  backdrop-filter: blur(10px);
+}
+
+#pipx-placeholder .pipx-title {
+  margin: 0 0 12px;
+  font-size: clamp(1.4rem, 2vw + 0.5rem, 2rem);
+  font-weight: 700;
+  color: #0f172a;
+}
+
+#pipx-placeholder .pipx-text {
+  margin: 0 0 24px;
+  font-size: clamp(0.95rem, 0.5vw + 0.85rem, 1.05rem);
+  line-height: 1.6;
+  color: rgba(15, 23, 42, 0.75);
+}
+
+#pipx-placeholder .pipx-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+#pipx-placeholder .pipx-return {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 28px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: linear-gradient(120deg, #2563eb, #7c3aed);
+  color: #f8fafc;
+  box-shadow: 0 16px 40px rgba(37, 99, 235, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+#pipx-placeholder .pipx-return:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+#pipx-placeholder .pipx-note {
+  margin-top: 18px;
+  font-size: 0.88rem;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+#pipx-unsupported-banner {
+  position: fixed;
+  inset-block-end: 20px;
+  inset-inline-end: 20px;
+  max-width: min(360px, 90vw);
+  padding: 14px 18px;
+  background: rgba(220, 38, 38, 0.92);
+  color: #fdf2f8;
+  font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 0.95rem;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(153, 27, 27, 0.35);
+  z-index: 2147483600;
+}
+
+@media (prefers-color-scheme: dark) {
+  #pipx-placeholder {
+    background: radial-gradient(120% 120% at 50% 0%, rgba(96, 165, 250, 0.18), rgba(15, 23, 42, 0.9)) #0f172a;
+    color: #e2e8f0;
+  }
+  #pipx-placeholder .pipx-card {
+    background: rgba(15, 23, 42, 0.7);
+    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.65);
+  }
+  #pipx-placeholder .pipx-title {
+    color: #e2e8f0;
+  }
+  #pipx-placeholder .pipx-text {
+    color: rgba(226, 232, 240, 0.75);
+  }
+  #pipx-placeholder .pipx-note {
+    color: rgba(148, 163, 184, 0.8);
+  }
+  #pipx-unsupported-banner {
+    background: rgba(239, 68, 68, 0.82);
+    color: #fee2e2;
+  }
+}

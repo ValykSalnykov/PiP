@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "Interactive Tab Picture-in-Picture",
+  "description": "Открывает активную вкладку в интерактивном окне «картинка в картинке», которое всегда поверх других окон.",
+  "version": "1.1.0",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "Открыть вкладку в PiP",
+    "default_icon": {
+      "16": "icons/icon16.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png"
+  },
+  "permissions": [
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "commands": {
+    "toggle-pip": {
+      "suggested_key": {
+        "default": "Alt+Shift+P"
+      },
+      "description": "Переключить режим PiP для текущей вкладки"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inpage/pip-main.js",
+        "inpage/pip-placeholder.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,5 @@
 /**
- * @file Основной in-page скрипт для Document Picture-in-Picture.
- * Добавляет выбор элемента и поток трансляции только выбранного узла.
+ * @file Основной in-page скрипт, управляющий Document Picture-in-Picture.
  */
 (() => {
   const LOG_NAMESPACE = 'Interactive PiP';
@@ -56,13 +55,7 @@
     originalBackground: null,
     htmlAttributes: null,
     bodyAttributes: null,
-    movedNodes: null,
-    mode: null,
-    selectedElement: null,
-    elementParent: null,
-    elementNextSibling: null,
-    elementPlaceholder: null,
-    selection: null
+    movedNodes: null
   };
 
   function post(message) {
@@ -93,16 +86,6 @@
       toggle(data.trigger ?? 'extension');
     } else if (data.type === 'CLOSE') {
       restore(data.trigger ?? 'extension');
-    } else if (data.type === 'SELECT_ELEMENT') {
-      startElementSelection(data.trigger ?? 'extension').catch((error) => {
-        logger.error('Failed to start element selection', error);
-        post({
-          type: 'PIP_SELECTION',
-          state: 'idle',
-          reason: 'failed',
-          message: error?.message ?? String(error)
-        });
-      });
     }
   }
 
@@ -126,651 +109,50 @@
       return restore(trigger);
     }
 
-    return openPip({ mode: 'page', trigger });
+    state.openPromise = open(trigger).finally(() => {
+      state.openPromise = null;
+    });
+    return state.openPromise;
   }
 
-  async function startElementSelection(trigger) {
-    logger.info('Element selection requested', { trigger });
-
-    if (!isSupported()) {
-      logger.warn('Document Picture-in-Picture API is not available');
-      showUnsupportedNotice();
-      post({ type: 'PIP_UNSUPPORTED', reason: 'api-missing' });
-      return;
+  async function open(trigger) {
+    const options = { preferInitialWindowPlacement: true };
+    if (lastKnownSize) {
+      options.width = lastKnownSize.width;
+      options.height = lastKnownSize.height;
     }
 
-    if (state.selection) {
-      cancelElementSelection('toggle');
-      return;
-    }
+    logger.info('Opening PiP window', { trigger, options });
 
+    let pipWindow;
     try {
-      if (state.openPromise) {
-        await state.openPromise.catch(() => {});
-      }
-      if (state.restorePromise) {
-        await state.restorePromise.catch(() => {});
-      }
-      if (state.pipWindow && !state.pipWindow.closed) {
-        await restore('selection-start');
-      }
+      pipWindow = await window.documentPictureInPicture.requestWindow(options);
+      logger.debug('PiP window handle acquired', {
+        width: pipWindow.innerWidth,
+        height: pipWindow.innerHeight
+      });
     } catch (error) {
-      logger.warn('Failed to settle previous PiP state before selection', error);
+      logger.error('requestWindow failed', error);
+      showUnsupportedNotice();
+      post({ type: 'PIP_UNSUPPORTED', reason: 'request-failed', message: error?.message });
+      throw error;
     }
 
     const body = document.body || (await waitForBody());
     if (!body) {
-      throw new Error('Document body is not ready for element selection');
-    }
-
-    const overlay = document.createElement('div');
-    overlay.id = 'pipx-selection-overlay';
-    overlay.dataset.pipxSelectionOverlay = 'true';
-    overlay.style.position = 'fixed';
-    overlay.style.inset = '0';
-    overlay.style.zIndex = '2147483638';
-    overlay.style.pointerEvents = 'none';
-    overlay.style.background = 'rgba(15, 23, 42, 0.05)';
-    overlay.style.backdropFilter = 'blur(1.5px)';
-    overlay.style.transition = 'opacity 0.2s ease';
-
-    const highlight = document.createElement('div');
-    highlight.id = 'pipx-selection-highlight';
-    highlight.dataset.pipxSelectionOverlay = 'true';
-    highlight.style.position = 'fixed';
-    highlight.style.pointerEvents = 'none';
-    highlight.style.display = 'none';
-    highlight.style.border = '2px solid rgba(59, 130, 246, 0.85)';
-    highlight.style.background = 'rgba(59, 130, 246, 0.18)';
-    highlight.style.borderRadius = '8px';
-    highlight.style.boxShadow = '0 18px 40px rgba(37, 99, 235, 0.25)';
-
-    const tooltip = document.createElement('div');
-    tooltip.id = 'pipx-selection-tooltip';
-    tooltip.dataset.pipxSelectionOverlay = 'true';
-    tooltip.style.position = 'fixed';
-    tooltip.style.pointerEvents = 'none';
-    tooltip.style.display = 'none';
-    tooltip.style.padding = '6px 12px';
-    tooltip.style.borderRadius = '999px';
-    tooltip.style.background = 'rgba(15, 23, 42, 0.86)';
-    tooltip.style.color = '#f8fafc';
-    tooltip.style.font = '500 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif';
-    tooltip.style.whiteSpace = 'nowrap';
-
-    const hint = document.createElement('div');
-    hint.id = 'pipx-selection-hint';
-    hint.dataset.pipxSelectionOverlay = 'true';
-    hint.style.position = 'fixed';
-    hint.style.pointerEvents = 'none';
-    hint.style.right = '24px';
-    hint.style.bottom = '24px';
-    hint.style.padding = '10px 16px';
-    hint.style.borderRadius = '12px';
-    hint.style.background = 'rgba(15, 23, 42, 0.82)';
-    hint.style.color = '#f8fafc';
-    hint.style.font = '500 12px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif';
-    hint.style.maxWidth = '280px';
-    hint.textContent = 'Наведите курсор и кликните по элементу, чтобы вывести его в плавающее окно. Esc или правая кнопка — отмена.';
-
-    overlay.appendChild(highlight);
-    overlay.appendChild(tooltip);
-    overlay.appendChild(hint);
-    body.appendChild(overlay);
-
-    const previousCursor = document.body.style.cursor;
-    document.body.style.cursor = 'crosshair';
-
-    state.selection = {
-      overlay,
-      highlight,
-      tooltip,
-      hint,
-      trigger,
-      currentTarget: null,
-      pendingTarget: null,
-      previousCursor
-    };
-
-    document.addEventListener('pointermove', handleSelectionPointerMove, true);
-    document.addEventListener('pointerdown', handleSelectionPointerDown, true);
-    document.addEventListener('click', handleSelectionClick, true);
-    document.addEventListener('keydown', handleSelectionKeyDown, true);
-    window.addEventListener('scroll', handleSelectionViewportChange, true);
-    window.addEventListener('resize', handleSelectionViewportChange, true);
-
-    post({ type: 'PIP_SELECTION', state: 'active', trigger });
-    logger.info('Element selection overlay enabled', { trigger });
-  }
-
-  function cancelElementSelection(reason = 'cancelled') {
-    const selection = state.selection;
-    if (!selection) return;
-
-    document.removeEventListener('pointermove', handleSelectionPointerMove, true);
-    document.removeEventListener('pointerdown', handleSelectionPointerDown, true);
-    document.removeEventListener('click', handleSelectionClick, true);
-    document.removeEventListener('keydown', handleSelectionKeyDown, true);
-    window.removeEventListener('scroll', handleSelectionViewportChange, true);
-    window.removeEventListener('resize', handleSelectionViewportChange, true);
-
-    if (selection.overlay?.isConnected) {
-      selection.overlay.remove();
-    }
-
-    if (selection.previousCursor !== undefined) {
-      if (selection.previousCursor) {
-        document.body.style.cursor = selection.previousCursor;
-      } else {
-        document.body.style.removeProperty('cursor');
-      }
-    }
-
-    state.selection = null;
-    post({ type: 'PIP_SELECTION', state: 'idle', reason });
-    logger.info('Element selection overlay removed', { reason });
-  }
-
-  function finishElementSelection(target, trigger) {
-    if (!target || !(target instanceof Element)) {
-      logger.warn('No selectable element under cursor to stream');
-      cancelElementSelection('empty');
-      return;
-    }
-    const selectionTrigger = trigger ?? state.selection?.trigger ?? 'selection';
-    cancelElementSelection('selected');
-
-    queueMicrotask(() => {
-      if (!target.isConnected) {
-        logger.warn('Selected element is no longer in the document, aborting PiP');
-        return;
-      }
-      openElementInPip(target, selectionTrigger).catch((error) => {
-        logger.error('Failed to open selected element in PiP', error);
-      });
-    });
-  }
-
-  function handleSelectionPointerMove(event) {
-    const selection = state.selection;
-    if (!selection) return;
-
-    const target = pickSelectableElement(event.clientX, event.clientY);
-    selection.currentTarget = target || null;
-
-    updateSelectionHighlight();
-  }
-
-  function handleSelectionPointerDown(event) {
-    const selection = state.selection;
-    if (!selection) return;
-
-    if (event.button !== 0) {
-      event.preventDefault();
-      event.stopPropagation();
-      cancelElementSelection('pointer-cancel');
+      logger.warn('Document body missing — closing PiP window');
+      pipWindow.close();
+      post({ type: 'PIP_UNSUPPORTED', reason: 'body-missing' });
       return;
     }
 
-    const target = pickSelectableElement(event.clientX, event.clientY);
-    if (!target) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
+    const previousFocus = getActiveFocusableElement(body);
+    const previousScroll = { x: window.scrollX, y: window.scrollY };
 
-    selection.pendingTarget = target;
-    event.preventDefault();
-    event.stopPropagation();
-  }
+    state.originalBackground = getPageBackgroundColor();
+    state.htmlAttributes = captureElementAttributes(document.documentElement);
+    state.bodyAttributes = captureElementAttributes(body);
 
-  function handleSelectionClick(event) {
-    const selection = state.selection;
-    if (!selection) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const target = selection.pendingTarget || selection.currentTarget;
-    finishElementSelection(target, selection.trigger);
-  }
-
-  function handleSelectionKeyDown(event) {
-    const selection = state.selection;
-    if (!selection) return;
-
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      cancelElementSelection('escape');
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      finishElementSelection(selection.currentTarget, `${selection.trigger ?? 'selection'}-keyboard`);
-    }
-  }
-
-  function handleSelectionViewportChange() {
-    updateSelectionHighlight();
-  }
-
-  function updateSelectionHighlight() {
-    const selection = state.selection;
-    if (!selection) return;
-
-    const target = selection.currentTarget;
-    const { highlight, tooltip } = selection;
-
-    if (!target || !(target instanceof Element)) {
-      highlight.style.display = 'none';
-      tooltip.style.display = 'none';
-      selection.pendingTarget = null;
-      return;
-    }
-
-    const rect = target.getBoundingClientRect();
-    if (!rect || rect.width === 0 || rect.height === 0) {
-      highlight.style.display = 'none';
-      tooltip.style.display = 'none';
-      return;
-    }
-
-    highlight.style.display = 'block';
-    highlight.style.left = `${rect.left}px`;
-    highlight.style.top = `${rect.top}px`;
-    highlight.style.width = `${Math.max(rect.width, 1)}px`;
-    highlight.style.height = `${Math.max(rect.height, 1)}px`;
-
-    tooltip.style.display = 'block';
-    tooltip.textContent = describeElement(target);
-    const tooltipRect = tooltip.getBoundingClientRect();
-    const tooltipWidth = tooltipRect.width || tooltip.textContent.length * 8;
-    const tooltipHeight = tooltipRect.height || 20;
-
-    let left = rect.left + rect.width / 2 - tooltipWidth / 2;
-    left = Math.min(Math.max(8, left), window.innerWidth - tooltipWidth - 8);
-    let top = rect.top - tooltipHeight - 12;
-    if (top < 8) {
-      top = rect.bottom + 12;
-    }
-    tooltip.style.left = `${left}px`;
-    tooltip.style.top = `${top}px`;
-  }
-
-  function pickSelectableElement(clientX, clientY) {
-    let element = document.elementFromPoint(clientX, clientY);
-    while (element) {
-      if (!(element instanceof Element)) return null;
-      if (element.dataset?.pipxSelectionOverlay === 'true') {
-        element = element.parentElement;
-        continue;
-      }
-      if (element.dataset?.pipx === 'element-placeholder') {
-        element = element.parentElement;
-        continue;
-      }
-      if (element === document.documentElement || element === document.body) {
-        return null;
-      }
-      return element;
-    }
-    return null;
-  }
-
-  async function openElementInPip(element, trigger) {
-    return openPip({ mode: 'element', element, trigger });
-  }
-
-  async function openPip({ mode, element, trigger }) {
-    if (!isSupported()) {
-      logger.warn('Document Picture-in-Picture API is not available');
-      showUnsupportedNotice();
-      post({ type: 'PIP_UNSUPPORTED', reason: 'api-missing' });
-      return;
-    }
-
-    if (state.openPromise) {
-      logger.debug('Open skipped — another open promise already in progress');
-      return state.openPromise;
-    }
-
-    if (state.pipWindow && !state.pipWindow.closed) {
-      logger.info('PiP already open, scheduling restore', { trigger, mode });
-      return restore(trigger);
-    }
-
-    state.openPromise = (async () => {
-      const options = { preferInitialWindowPlacement: true };
-      if (lastKnownSize) {
-        options.width = lastKnownSize.width;
-        options.height = lastKnownSize.height;
-      }
-
-      let pipWindow;
-      try {
-        pipWindow = await window.documentPictureInPicture.requestWindow(options);
-        logger.debug('PiP window handle acquired', {
-          width: pipWindow.innerWidth,
-          height: pipWindow.innerHeight,
-          mode
-        });
-      } catch (error) {
-        logger.error('requestWindow failed', error);
-        showUnsupportedNotice();
-        post({ type: 'PIP_UNSUPPORTED', reason: 'request-failed', message: error?.message });
-        throw error;
-      }
-
-      const body = document.body || (await waitForBody());
-      if (!body) {
-        logger.warn('Document body missing — closing PiP window');
-        pipWindow.close();
-        post({ type: 'PIP_UNSUPPORTED', reason: 'body-missing' });
-        return;
-      }
-
-      const previousFocus = getActiveFocusableElement(body);
-      const previousScroll = { x: window.scrollX, y: window.scrollY };
-
-      state.originalBackground = getPageBackgroundColor();
-      state.htmlAttributes = captureElementAttributes(document.documentElement);
-      state.bodyAttributes = captureElementAttributes(body);
-      state.mode = mode;
-      state.movedNodes = null;
-      state.selectedElement = null;
-      state.elementParent = null;
-      state.elementNextSibling = null;
-      state.elementPlaceholder = null;
-      state.placeholder = null;
-
-      let placeholder = null;
-      let fragment = document.createDocumentFragment();
-
-      try {
-        if (mode === 'page') {
-          const result = detachBodyContent(body);
-          fragment = result.fragment;
-          state.movedNodes = result.movedNodes;
-          placeholder = createPagePlaceholder();
-          body.appendChild(placeholder);
-        } else if (mode === 'element') {
-          if (!element || !(element instanceof Element) || !element.isConnected) {
-            throw new Error('Selected element is not available in the document');
-          }
-          const result = detachElement(element);
-          fragment = result.fragment;
-          placeholder = result.placeholder;
-          state.selectedElement = result.element;
-          state.elementParent = result.parent;
-          state.elementNextSibling = result.nextSibling;
-          state.elementPlaceholder = placeholder;
-        } else {
-          throw new Error(`Unsupported PiP mode: ${String(mode)}`);
-        }
-
-        state.placeholder = placeholder;
-
-        document.documentElement?.setAttribute('data-pipx-active', 'true');
-        body.setAttribute('data-pipx-state', mode === 'page' ? 'placeholder' : 'element-placeholder');
-
-        preparePipWindow(
-          pipWindow,
-          fragment,
-          state.originalBackground,
-          state.htmlAttributes,
-          state.bodyAttributes
-        );
-
-        const pipHideHandler = () => {
-          if (state.isRestoring) return;
-          logger.warn('PiP window closed by user — restoring content');
-          restore('pip-window-closed');
-        };
-        pipWindow.addEventListener('pagehide', pipHideHandler);
-
-        const pipResizeHandler = () => {
-          lastKnownSize = {
-            width: pipWindow.innerWidth,
-            height: pipWindow.innerHeight
-          };
-          logger.debug('PiP window resized', lastKnownSize);
-        };
-        pipWindow.addEventListener('resize', pipResizeHandler);
-
-        state.pipWindow = pipWindow;
-        state.scroll = previousScroll;
-        state.lastFocus = previousFocus;
-        state.pipHideHandler = pipHideHandler;
-        state.pipResizeHandler = pipResizeHandler;
-
-        if (previousFocus && typeof previousFocus.focus === 'function') {
-          queueMicrotask(() => {
-            try {
-              previousFocus.focus({ preventScroll: true });
-            } catch (focusError) {
-              logger.warn('Failed to refocus previous element, focusing PiP window', focusError);
-              pipWindow.focus();
-            }
-          });
-        } else {
-          pipWindow.focus();
-        }
-
-        post({ type: 'PIP_STATE', state: 'open', trigger, mode });
-        logger.info('PiP window initialised', { trigger, mode });
-      } catch (error) {
-        logger.error('Failed to initialise PiP window', error);
-
-        try {
-          if (mode === 'page') {
-            const movedNodes = state.movedNodes || [];
-            movedNodes.forEach((node) => {
-              body.appendChild(node);
-            });
-            state.movedNodes = null;
-          } else if (mode === 'element') {
-            if (state.selectedElement) {
-              const adopt = state.selectedElement.ownerDocument === document
-                ? state.selectedElement
-                : document.adoptNode(state.selectedElement);
-              const parent = state.elementParent;
-              if (parent?.isConnected) {
-                parent.insertBefore(adopt, state.elementNextSibling || null);
-              }
-            }
-            if (state.elementPlaceholder?.isConnected) {
-              state.elementPlaceholder.remove();
-            }
-            state.selectedElement = null;
-            state.elementParent = null;
-            state.elementNextSibling = null;
-            state.elementPlaceholder = null;
-          }
-        } catch (rollbackError) {
-          logger.warn('Rollback after PiP failure encountered an error', rollbackError);
-        }
-
-        if (placeholder?.isConnected) {
-          placeholder.remove();
-        }
-        document.documentElement?.removeAttribute('data-pipx-active');
-        body.removeAttribute('data-pipx-state');
-
-        cleanupObservers();
-        if (state.pipControls) {
-          state.pipControls.remove();
-          state.pipControls = null;
-        }
-
-        try {
-          if (pipWindow && !pipWindow.closed) {
-            pipWindow.close();
-          }
-        } catch (closeError) {
-          logger.warn('Unable to close PiP window after failure', closeError);
-        }
-
-        state.mode = null;
-        throw error;
-      }
-    })().finally(() => {
-      state.openPromise = null;
-    });
-
-    return state.openPromise;
-  }
-
-  function restore(trigger) {
-    if (state.restorePromise) {
-      logger.debug('Restore skipped — restore promise already in progress');
-      return state.restorePromise;
-    }
-
-    state.restorePromise = (async () => {
-      state.isRestoring = true;
-      const activeMode = state.mode;
-      logger.info('Restoring content from PiP', { trigger, mode: activeMode });
-
-      const body = document.body || (await waitForBody());
-      const mode = activeMode;
-
-      if (mode === 'page') {
-        const movedNodes = state.movedNodes || [];
-        movedNodes.forEach((node) => {
-          body.appendChild(node);
-        });
-        state.movedNodes = null;
-
-        if (state.placeholder?.isConnected) {
-          state.placeholder.remove();
-        }
-      } else if (mode === 'element') {
-        const parent = state.elementParent;
-        const placeholder = state.elementPlaceholder;
-        const nextSibling = state.elementNextSibling;
-        const element = state.selectedElement;
-
-        if (element && parent?.isConnected) {
-          const adopt = element.ownerDocument === document ? element : document.adoptNode(element);
-          if (placeholder?.parentNode === parent) {
-            parent.insertBefore(adopt, placeholder);
-            placeholder.remove();
-          } else {
-            parent.insertBefore(adopt, nextSibling || null);
-            if (placeholder?.isConnected) {
-              placeholder.remove();
-            }
-          }
-        } else if (element) {
-          document.body?.appendChild(document.adoptNode(element));
-        }
-
-        state.selectedElement = null;
-        state.elementParent = null;
-        state.elementNextSibling = null;
-        state.elementPlaceholder = null;
-        state.placeholder = null;
-      }
-
-      body?.removeAttribute('data-pipx-state');
-      document.documentElement?.removeAttribute('data-pipx-active');
-
-      if (state.pipControls) {
-        state.pipControls.remove();
-        state.pipControls = null;
-      }
-
-      cleanupObservers();
-
-      if (state.pipWindow) {
-        try {
-          if (state.pipHideHandler) {
-            state.pipWindow.removeEventListener('pagehide', state.pipHideHandler);
-          }
-          if (state.pipResizeHandler) {
-            state.pipWindow.removeEventListener('resize', state.pipResizeHandler);
-          }
-          if (!state.pipWindow.closed) {
-            state.pipWindow.close();
-          }
-        } catch (error) {
-          logger.warn('Failed to close PiP window during restore', error);
-        }
-      }
-
-      state.pipWindow = null;
-      state.pipHideHandler = null;
-      state.pipResizeHandler = null;
-
-      const { x, y } = state.scroll || { x: 0, y: 0 };
-      window.scrollTo(x, y);
-
-      if (state.lastFocus && body?.contains(state.lastFocus)) {
-        setTimeout(() => {
-          try {
-            state.lastFocus.focus({ preventScroll: true });
-          } catch (focusError) {
-            logger.debug('Unable to restore focus to previous element', focusError);
-          }
-        }, 0);
-      }
-      state.lastFocus = null;
-
-      state.originalBackground = null;
-      state.htmlAttributes = null;
-      state.bodyAttributes = null;
-      state.mode = null;
-
-      post({ type: 'PIP_STATE', state: 'closed', trigger, mode });
-      logger.info('Content restored from PiP', { trigger, mode });
-    })().finally(() => {
-      state.isRestoring = false;
-      state.restorePromise = null;
-    });
-
-    return state.restorePromise;
-  }
-
-  function createPagePlaceholder() {
-    const wrapper = document.createElement('section');
-    wrapper.id = 'pipx-placeholder';
-    wrapper.setAttribute('role', 'status');
-
-    const card = document.createElement('div');
-    card.className = 'pipx-card';
-
-    const title = document.createElement('h1');
-    title.className = 'pipx-title';
-    title.textContent = 'Страница открыта в плавающем окне';
-
-    const description = document.createElement('p');
-    description.className = 'pipx-text';
-    const hotkey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌥⇧P' : 'Alt+Shift+P';
-    description.textContent =
-      `Окно «картинка в картинке» остаётся поверх всех приложений. Верните содержимое во вкладку кнопкой ниже или сочетанием ${hotkey}.`;
-
-    const actions = document.createElement('div');
-    actions.className = 'pipx-actions';
-
-    const returnButton = document.createElement('button');
-    returnButton.type = 'button';
-    returnButton.className = 'pipx-return';
-    returnButton.textContent = 'Вернуть во вкладку';
-    returnButton.addEventListener('click', () => restore('placeholder-button'));
-
-    const note = document.createElement('p');
-    note.className = 'pipx-note';
-    note.textContent = 'Закрытие исходной вкладки автоматически закроет плавающее окно.';
-
-    actions.appendChild(returnButton);
-    card.appendChild(title);
-    card.appendChild(description);
-    card.appendChild(actions);
-    card.appendChild(note);
-    wrapper.appendChild(card);
-
-    return wrapper;
-  }
-
-  function detachBodyContent(body) {
     const fragment = document.createDocumentFragment();
     const movedNodes = [];
     while (body.firstChild) {
@@ -778,59 +160,120 @@
       movedNodes.push(node);
       fragment.appendChild(node);
     }
-    return { fragment, movedNodes };
-  }
 
-  function detachElement(element) {
-    const parent = element.parentNode;
-    if (!parent) {
-      throw new Error('Selected element has no parent node');
+    const placeholder = createPlaceholder();
+
+    try {
+      body.appendChild(placeholder);
+
+      document.documentElement?.setAttribute('data-pipx-active', 'true');
+      body.setAttribute('data-pipx-state', 'placeholder');
+
+      preparePipWindow(
+        pipWindow,
+        fragment,
+        state.originalBackground,
+        state.htmlAttributes,
+        state.bodyAttributes
+      );
+
+      const pipHideHandler = () => {
+        if (state.isRestoring) return;
+        logger.warn('PiP window closed by user — restoring content');
+        restore('pip-window-closed');
+      };
+      pipWindow.addEventListener('pagehide', pipHideHandler);
+
+      const pipResizeHandler = () => {
+        lastKnownSize = {
+          width: pipWindow.innerWidth,
+          height: pipWindow.innerHeight
+        };
+        logger.debug('PiP window resized', lastKnownSize);
+      };
+      pipWindow.addEventListener('resize', pipResizeHandler);
+
+      state.placeholder = placeholder;
+      state.pipWindow = pipWindow;
+      state.scroll = previousScroll;
+      state.lastFocus = previousFocus;
+      state.pipHideHandler = pipHideHandler;
+      state.pipResizeHandler = pipResizeHandler;
+      state.movedNodes = movedNodes;
+
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        queueMicrotask(() => {
+          try {
+            previousFocus.focus({ preventScroll: true });
+          } catch (focusError) {
+            logger.warn('Failed to refocus previous element, focusing PiP window', focusError);
+            pipWindow.focus();
+          }
+        });
+      } else {
+        pipWindow.focus();
+      }
+
+      post({ type: 'PIP_STATE', state: 'open', trigger });
+      logger.info('PiP window initialised', { trigger });
+    } catch (error) {
+      logger.error('Failed to initialise PiP window', error);
+
+      try {
+        if (placeholder?.isConnected) {
+          placeholder.remove();
+        }
+      } catch (placeholderError) {
+        logger.warn('Unable to remove placeholder during failure', placeholderError);
+      }
+
+      document.documentElement?.removeAttribute('data-pipx-active');
+      body.removeAttribute('data-pipx-state');
+
+      cleanupObservers();
+      if (state.pipControls) {
+        state.pipControls.remove();
+        state.pipControls = null;
+      }
+
+      try {
+        movedNodes.forEach((node) => {
+          const ownerDoc = node.ownerDocument;
+          if (ownerDoc && ownerDoc !== document) {
+            body.appendChild(document.adoptNode(node));
+          } else {
+            body.appendChild(node);
+          }
+        });
+      } catch (restoreError) {
+        logger.warn('Unable to move nodes back into body', restoreError);
+      }
+
+      try {
+        if (pipWindow && !pipWindow.closed) {
+          pipWindow.close();
+        }
+      } catch (closeError) {
+        logger.warn('Unable to close PiP window after failure', closeError);
+      }
+
+      state.placeholder = null;
+      state.movedNodes = null;
+      state.originalBackground = null;
+      state.htmlAttributes = null;
+      state.bodyAttributes = null;
+
+      throw error;
     }
-
-    const placeholder = createElementPlaceholder(element);
-    parent.insertBefore(placeholder, element);
-
-    const nextSibling = element.nextSibling;
-    const fragment = document.createDocumentFragment();
-    fragment.appendChild(element);
-
-    return {
-      fragment,
-      placeholder,
-      parent,
-      nextSibling,
-      element
-    };
   }
 
-  function createElementPlaceholder(element) {
-    const clone = element.cloneNode(true);
-    clone.dataset.pipx = 'element-placeholder';
-    clone.classList.add('pipx-element-placeholder');
-    clone.setAttribute('aria-hidden', 'true');
-    clone.style.pointerEvents = 'none';
-    clone.style.userSelect = 'none';
-    clone.style.opacity = '0.25';
-    clone.style.outline = '2px dashed rgba(59, 130, 246, 0.5)';
-    clone.style.outlineOffset = '4px';
-    clone.style.transition = 'opacity 0.2s ease, outline-color 0.2s ease';
-
-    sanitizePlaceholder(clone);
-    disableInteractiveDescendants(clone);
-
-    clone.addEventListener('mouseenter', () => {
-      clone.style.opacity = '0.35';
-      clone.style.outlineColor = 'rgba(37, 99, 235, 0.65)';
-    });
-    clone.addEventListener('mouseleave', () => {
-      clone.style.opacity = '0.25';
-      clone.style.outlineColor = 'rgba(59, 130, 246, 0.5)';
-    });
-
-    return clone;
-  }
-
-  function preparePipWindow(pipWindow, fragment, backgroundColor, htmlAttributes, bodyAttributes) {
+  function preparePipWindow(
+    pipWindow,
+    fragment,
+    backgroundColor,
+    htmlAttributes,
+    bodyAttributes
+  ) {
     logger.debug('Preparing PiP window document');
 
     const pipDoc = pipWindow.document;
@@ -864,30 +307,149 @@
     state.pipControls = controls;
   }
 
+  function restore(trigger) {
+    if (state.restorePromise) {
+      logger.debug('Restore skipped — restore promise already in progress');
+      return state.restorePromise;
+    }
+
+    state.restorePromise = (async () => {
+      state.isRestoring = true;
+      logger.info('Restoring tab content from PiP', { trigger });
+
+      const body = document.body || (await waitForBody());
+      const pipWindow = state.pipWindow;
+
+      if (state.placeholder) {
+        try {
+          state.placeholder.remove();
+        } catch (placeholderError) {
+          logger.warn('Unable to remove placeholder during restore', placeholderError);
+        }
+      }
+      state.placeholder = null;
+
+      body?.removeAttribute('data-pipx-state');
+      document.documentElement?.removeAttribute('data-pipx-active');
+
+      const movedNodes = state.movedNodes || [];
+      if (body && movedNodes.length) {
+        movedNodes.forEach((node) => {
+          try {
+            const ownerDoc = node.ownerDocument;
+            if (ownerDoc && ownerDoc !== document) {
+              body.appendChild(document.adoptNode(node));
+            } else {
+              body.appendChild(node);
+            }
+          } catch (error) {
+            logger.warn('Failed to move node back into main document', error);
+          }
+        });
+      }
+      state.movedNodes = null;
+
+      if (state.pipControls) {
+        state.pipControls.remove();
+        state.pipControls = null;
+      }
+
+      cleanupObservers();
+
+      if (pipWindow) {
+        try {
+          if (state.pipHideHandler) {
+            pipWindow.removeEventListener('pagehide', state.pipHideHandler);
+          }
+        } catch (error) {
+          logger.debug('Failed to detach pagehide listener', error);
+        }
+        try {
+          if (state.pipResizeHandler) {
+            pipWindow.removeEventListener('resize', state.pipResizeHandler);
+          }
+        } catch (error) {
+          logger.debug('Failed to detach resize listener', error);
+        }
+        try {
+          if (!pipWindow.closed) {
+            pipWindow.close();
+          }
+        } catch (error) {
+          logger.warn('Failed to close PiP window during restore', error);
+        }
+      }
+
+      state.pipWindow = null;
+      state.pipHideHandler = null;
+      state.pipResizeHandler = null;
+      state.originalBackground = null;
+      state.htmlAttributes = null;
+      state.bodyAttributes = null;
+
+      const { x, y } = state.scroll || { x: 0, y: 0 };
+      window.scrollTo(x, y);
+
+      if (state.lastFocus && body?.contains(state.lastFocus)) {
+        setTimeout(() => {
+          try {
+            state.lastFocus.focus({ preventScroll: true });
+          } catch (focusError) {
+            logger.debug('Unable to restore focus to previous element', focusError);
+          }
+        }, 0);
+      }
+      state.lastFocus = null;
+
+      post({ type: 'PIP_STATE', state: 'closed', trigger });
+      logger.info('Tab content restored', { trigger });
+    })().finally(() => {
+      state.isRestoring = false;
+      state.restorePromise = null;
+    });
+
+    return state.restorePromise;
+  }
+
+  function createPlaceholder() {
+    logger.debug('Creating placeholder for original tab content');
+
+    const wrapper = document.createElement('section');
+    wrapper.id = 'pipx-placeholder';
+    wrapper.setAttribute('role', 'status');
+
+    const card = document.createElement('div');
+    card.className = 'pipx-card';
+
+    const title = document.createElement('h1');
+    title.className = 'pipx-title';
+    title.textContent = 'Страница открыта в плавающем окне';
+
+    const description = document.createElement('p');
+    description.className = 'pipx-text';
+    const hotkey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌥⇧P' : 'Alt+Shift+P';
+    description.textContent = `Окно «картинка в картинке» остаётся поверх всех приложений.`;
+
+    const note = document.createElement('p');
+    note.className = 'pipx-note';
+    note.textContent = 'Закрытие исходной вкладки автоматически закроет плавающее окно.';
+
+    card.appendChild(title);
+    card.appendChild(description);
+    card.appendChild(note);
+    wrapper.appendChild(card);
+
+    return wrapper;
+  }
+
   function createPipControls(pipDoc) {
+    logger.debug('Creating PiP overlay controls');
+
     const controls = pipDoc.createElement('div');
     controls.id = 'pipx-controls';
 
-    const returnButton = pipDoc.createElement('button');
-    returnButton.type = 'button';
-    returnButton.className = 'pipx-btn';
-    returnButton.textContent = 'Вернуть во вкладку';
-    returnButton.addEventListener('click', () => restore('pip-controls'));
+    // Кнопки "Вернуть во вкладку" и "Обновить" удалены
 
-    const reloadButton = pipDoc.createElement('button');
-    reloadButton.type = 'button';
-    reloadButton.className = 'pipx-btn';
-    reloadButton.textContent = 'Обновить';
-    reloadButton.addEventListener('click', () => {
-      try {
-        window.location.reload();
-      } catch (error) {
-        logger.warn('Reload inside PiP failed', error);
-      }
-    });
-
-    controls.appendChild(returnButton);
-    controls.appendChild(reloadButton);
     return controls;
   }
 
@@ -937,6 +499,14 @@ body.pipx-body {
 #pipx-controls .pipx-btn:hover {
   transform: translateY(-1px);
   background: rgba(37, 99, 235, 0.95);
+}
+
+#pipx-controls .pipx-hint {
+  pointer-events: none;
+  color: rgba(241, 245, 249, 0.85);
+  font-size: 11px;
+  text-shadow: 0 2px 6px rgba(15, 23, 42, 0.75);
+  max-width: 200px;
 }
 
 @media (prefers-color-scheme: light) {
@@ -1156,46 +726,5 @@ body.pipx-body {
       banner.remove();
       logger.debug('Unsupported API banner removed automatically');
     }, 6000);
-  }
-
-  function sanitizePlaceholder(root) {
-    const stack = [root];
-    while (stack.length) {
-      const node = stack.pop();
-      if (!node || node.nodeType !== Node.ELEMENT_NODE) continue;
-      if (node.hasAttribute('id')) {
-        node.removeAttribute('id');
-      }
-      Array.from(node.attributes).forEach((attr) => {
-        if (attr.name.startsWith('on')) {
-          node.removeAttribute(attr.name);
-        }
-      });
-      stack.push(...node.children);
-    }
-  }
-
-  function disableInteractiveDescendants(root) {
-    if (!(root instanceof Element)) return;
-    root.querySelectorAll('a, button, input, textarea, select, summary, details, [tabindex]').forEach((el) => {
-      el.setAttribute('tabindex', '-1');
-      el.setAttribute('aria-hidden', 'true');
-      if ('disabled' in el) {
-        try {
-          el.disabled = true;
-        } catch {
-          /* ignore */
-        }
-      }
-    });
-  }
-
-  function describeElement(element) {
-    const tag = element.tagName.toLowerCase();
-    const id = element.id ? `#${element.id}` : '';
-    const classList = element.classList.length
-      ? '.' + Array.from(element.classList).slice(0, 3).join('.')
-      : '';
-    return `${tag}${id}${classList}`;
   }
 })();

@@ -118,3 +118,14 @@ body[data-pipx-state="placeholder"] {
     color: #fee2e2;
   }
 }
+
+.pipx-element-placeholder {
+  position: relative;
+  overflow: hidden;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.pipx-element-placeholder:hover {
+  background: rgba(148, 163, 184, 0.15);
+  border-color: rgba(148, 163, 184, 0.6);
+}

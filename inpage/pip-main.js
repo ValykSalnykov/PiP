@@ -26,6 +26,12 @@
 
   const logger = createLogger('inpage', 'info');
 
+  const PIP_MODE_DOCUMENT = 'document';
+  const PIP_MODE_ELEMENT = 'element-only';
+  const DEFAULT_PIP_OPTIONS = Object.freeze({ mode: PIP_MODE_DOCUMENT });
+  const DEFAULT_TARGET_WAIT_MS = 1500;
+  const FORCED_DOCUMENT_TRIGGERS = new Set(['action', 'command', 'extension', 'page-request']);
+
   if (window.__interactiveTabPiP) {
     logger.debug('PiP controller already initialised');
     return;
@@ -39,6 +45,8 @@
   logger.info('In-page PiP controller bootstrapped');
 
   const state = {
+    mode: PIP_MODE_DOCUMENT,
+    lastOptions: DEFAULT_PIP_OPTIONS,
     pipWindow: null,
     placeholder: null,
     pipControls: null,
@@ -55,7 +63,8 @@
     originalBackground: null,
     htmlAttributes: null,
     bodyAttributes: null,
-    movedNodes: null
+    movedNodes: null,
+    elementState: null
   };
 
   function post(message) {
@@ -67,10 +76,156 @@
     return 'documentPictureInPicture' in window;
   }
 
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && value.constructor === Object;
+  }
+
+  function isElement(value) {
+    return typeof Element !== 'undefined' && value instanceof Element;
+  }
+
+  function normaliseToggleArgs(arg1, arg2) {
+    let options = null;
+    let trigger = 'page-call';
+
+    if (isPlainObject(arg1) || isElement(arg1)) {
+      options = isElement(arg1) ? { targetElement: arg1, mode: PIP_MODE_ELEMENT } : arg1;
+      if (typeof arg2 === 'string') {
+        trigger = arg2;
+      } else if (typeof arg1?.trigger === 'string') {
+        trigger = arg1.trigger;
+      }
+    } else if (typeof arg1 === 'string') {
+      trigger = arg1;
+    } else if (typeof arg2 === 'string') {
+      trigger = arg2;
+    }
+
+    return { options, trigger };
+  }
+
+  function normaliseOpenOptions(options) {
+    if (!options) return null;
+
+    if (isElement(options)) {
+      return {
+        mode: PIP_MODE_ELEMENT,
+        targetElement: options
+      };
+    }
+
+    if (!isPlainObject(options)) return null;
+
+    const mode = options.mode === PIP_MODE_ELEMENT ? PIP_MODE_ELEMENT : PIP_MODE_DOCUMENT;
+    const result = { mode };
+
+    if (mode === PIP_MODE_ELEMENT) {
+      if (isElement(options.targetElement)) {
+        result.targetElement = options.targetElement;
+      }
+      if (typeof options.targetSelector === 'string') {
+        const selector = options.targetSelector.trim();
+        if (selector.length > 0) {
+          result.targetSelector = selector;
+        }
+      }
+      if (Number.isFinite(options.waitForTargetMs)) {
+        result.waitForTargetMs = Math.max(0, Number(options.waitForTargetMs));
+      }
+      if (typeof options.placeholderMessage === 'string' && options.placeholderMessage.trim()) {
+        result.placeholderMessage = options.placeholderMessage.trim();
+      }
+    }
+
+    return result;
+  }
+
+  function shouldForceDocumentMode(trigger) {
+    return FORCED_DOCUMENT_TRIGGERS.has(trigger);
+  }
+
+  function cloneOptions(options) {
+    if (!options) return null;
+    const clone = { ...options };
+    if (options.targetElement) {
+      clone.targetElement = options.targetElement;
+    }
+    return clone;
+  }
+
+  function resolveToggleOptions(passedOptions, trigger) {
+    const normalised = normaliseOpenOptions(passedOptions);
+    if (normalised) {
+      return normalised;
+    }
+
+    if (shouldForceDocumentMode(trigger)) {
+      return { ...DEFAULT_PIP_OPTIONS };
+    }
+
+    if (state.lastOptions) {
+      return cloneOptions(state.lastOptions) ?? { ...DEFAULT_PIP_OPTIONS };
+    }
+
+    return { ...DEFAULT_PIP_OPTIONS };
+  }
+
+  async function resolveTargetElement(options) {
+    if (!options || options.mode !== PIP_MODE_ELEMENT) return null;
+
+    if (isElement(options.targetElement)) {
+      return options.targetElement;
+    }
+
+    if (!options.targetSelector) {
+      return null;
+    }
+
+    const immediate = document.querySelector(options.targetSelector);
+    if (immediate) {
+      return immediate;
+    }
+
+    const waitMs = Number.isFinite(options.waitForTargetMs)
+      ? Math.max(0, options.waitForTargetMs)
+      : DEFAULT_TARGET_WAIT_MS;
+
+    if (waitMs <= 0) return null;
+
+    return waitForElement(options.targetSelector, waitMs);
+  }
+
+  function waitForElement(selector, timeoutMs) {
+    return new Promise((resolve) => {
+      const found = document.querySelector(selector);
+      if (found) {
+        resolve(found);
+        return;
+      }
+
+      const root = document.documentElement || document;
+      const observer = new MutationObserver(() => {
+        const candidate = document.querySelector(selector);
+        if (candidate) {
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve(candidate);
+        }
+      });
+
+      const timer = setTimeout(() => {
+        observer.disconnect();
+        resolve(null);
+      }, timeoutMs);
+
+      observer.observe(root, { childList: true, subtree: true });
+    });
+  }
+
   window.addEventListener('message', handleIncomingMessage, false);
 
   window.__interactiveTabPiP = {
-    toggle: (trigger = 'page-call') => toggle(trigger),
+    toggle: (arg1, arg2) => toggle(arg1, arg2),
     close: (trigger = 'page-call') => restore(trigger),
     isOpen: () => Boolean(state.pipWindow && !state.pipWindow.closed)
   };
@@ -83,14 +238,22 @@
     logger.debug('Received message from extension', { type: data.type, trigger: data.trigger });
 
     if (data.type === 'TOGGLE') {
-      toggle(data.trigger ?? 'extension');
+      toggle(undefined, data.trigger ?? 'extension');
     } else if (data.type === 'CLOSE') {
       restore(data.trigger ?? 'extension');
     }
   }
 
-  async function toggle(trigger) {
-    logger.info('Toggle requested', { trigger });
+  async function toggle(arg1, arg2) {
+    const { options: requestedOptions, trigger } = normaliseToggleArgs(arg1, arg2);
+    const resolvedOptions = resolveToggleOptions(requestedOptions, trigger);
+
+    logger.info('Toggle requested', {
+      trigger,
+      mode: resolvedOptions.mode,
+      hasTargetSelector: Boolean(resolvedOptions.targetSelector),
+      hasTargetElement: Boolean(resolvedOptions.targetElement)
+    });
 
     if (!isSupported()) {
       logger.warn('Document Picture-in-Picture API is not available');
@@ -109,24 +272,34 @@
       return restore(trigger);
     }
 
-    state.openPromise = open(trigger).finally(() => {
-      state.openPromise = null;
-    });
+    const previousOptions = cloneOptions(state.lastOptions) ?? { ...DEFAULT_PIP_OPTIONS };
+    state.lastOptions = { ...resolvedOptions };
+    state.mode = resolvedOptions.mode;
+
+    state.openPromise = open(trigger, resolvedOptions)
+      .catch((error) => {
+        state.lastOptions = previousOptions;
+        state.mode = previousOptions?.mode ?? PIP_MODE_DOCUMENT;
+        throw error;
+      })
+      .finally(() => {
+        state.openPromise = null;
+      });
     return state.openPromise;
   }
 
-  async function open(trigger) {
-    const options = { preferInitialWindowPlacement: true };
+  async function open(trigger, options) {
+    const pipWindowOptions = { preferInitialWindowPlacement: true };
     if (lastKnownSize) {
-      options.width = lastKnownSize.width;
-      options.height = lastKnownSize.height;
+      pipWindowOptions.width = lastKnownSize.width;
+      pipWindowOptions.height = lastKnownSize.height;
     }
 
-    logger.info('Opening PiP window', { trigger, options });
+    logger.info('Opening PiP window', { trigger, requestOptions: pipWindowOptions });
 
     let pipWindow;
     try {
-      pipWindow = await window.documentPictureInPicture.requestWindow(options);
+      pipWindow = await window.documentPictureInPicture.requestWindow(pipWindowOptions);
       logger.debug('PiP window handle acquired', {
         width: pipWindow.innerWidth,
         height: pipWindow.innerHeight
@@ -149,10 +322,173 @@
     const previousFocus = getActiveFocusableElement(body);
     const previousScroll = { x: window.scrollX, y: window.scrollY };
 
-    state.originalBackground = getPageBackgroundColor();
-    state.htmlAttributes = captureElementAttributes(document.documentElement);
-    state.bodyAttributes = captureElementAttributes(body);
+    const htmlAttributes = captureElementAttributes(document.documentElement);
+    const bodyAttributes = captureElementAttributes(body);
+    const backgroundColor = getPageBackgroundColor();
 
+    let pipHideHandler = null;
+    let pipResizeHandler = null;
+
+    try {
+      if (options.mode === PIP_MODE_ELEMENT) {
+        const elementContext = await setupElementMode({
+          pipWindow,
+          body,
+          backgroundColor,
+          htmlAttributes,
+          bodyAttributes,
+          options
+        });
+
+        state.placeholder = null;
+        state.movedNodes = null;
+        state.originalBackground = backgroundColor;
+        state.htmlAttributes = htmlAttributes;
+        state.bodyAttributes = bodyAttributes;
+        state.pipControls = elementContext.controls;
+        state.elementState = {
+          target: elementContext.target,
+          parent: elementContext.parent,
+          nextSibling: elementContext.nextSibling,
+          placeholder: elementContext.placeholder,
+          container: elementContext.container,
+          selector: options.targetSelector ?? null
+        };
+        state.lastOptions = {
+          ...state.lastOptions,
+          targetElement: elementContext.target
+        };
+      } else {
+        const documentContext = setupDocumentMode({
+          pipWindow,
+          body,
+          backgroundColor,
+          htmlAttributes,
+          bodyAttributes
+        });
+
+        state.placeholder = documentContext.placeholder;
+        state.movedNodes = documentContext.movedNodes;
+        state.originalBackground = backgroundColor;
+        state.htmlAttributes = htmlAttributes;
+        state.bodyAttributes = bodyAttributes;
+        state.pipControls = documentContext.controls;
+        state.elementState = null;
+      }
+
+      pipHideHandler = () => {
+        if (state.isRestoring) return;
+        logger.warn('PiP window closed by user — restoring content');
+        restore('pip-window-closed');
+      };
+      pipWindow.addEventListener('pagehide', pipHideHandler);
+
+      pipResizeHandler = () => {
+        lastKnownSize = {
+          width: pipWindow.innerWidth,
+          height: pipWindow.innerHeight
+        };
+        logger.debug('PiP window resized', lastKnownSize);
+      };
+      pipWindow.addEventListener('resize', pipResizeHandler);
+
+      state.pipWindow = pipWindow;
+      state.scroll = previousScroll;
+      state.lastFocus = previousFocus;
+      state.pipHideHandler = pipHideHandler;
+      state.pipResizeHandler = pipResizeHandler;
+
+      if (previousFocus && typeof previousFocus.focus === 'function') {
+        queueMicrotask(() => {
+          try {
+            previousFocus.focus({ preventScroll: true });
+          } catch (focusError) {
+            logger.warn('Failed to refocus previous element, focusing PiP window', focusError);
+            pipWindow.focus();
+          }
+        });
+      } else {
+        pipWindow.focus();
+      }
+
+      post({ type: 'PIP_STATE', state: 'open', trigger, mode: options.mode });
+      logger.info('PiP window initialised', { trigger, mode: options.mode });
+    } catch (error) {
+      logger.error('Failed to initialise PiP window', error);
+
+      if (pipHideHandler) {
+        pipWindow.removeEventListener('pagehide', pipHideHandler);
+      }
+      if (pipResizeHandler) {
+        pipWindow.removeEventListener('resize', pipResizeHandler);
+      }
+
+      if (options.mode === PIP_MODE_ELEMENT) {
+        rollbackElementMode(body);
+      } else {
+        rollbackDocumentMode(body);
+      }
+
+      cleanupObservers();
+      if (state.pipControls) {
+        state.pipControls.remove();
+        state.pipControls = null;
+      }
+
+      try {
+        if (pipWindow && !pipWindow.closed) {
+          pipWindow.close();
+        }
+      } catch (closeError) {
+        logger.warn('Unable to close PiP window after failure', closeError);
+      }
+
+      state.pipWindow = null;
+      state.pipHideHandler = null;
+      state.pipResizeHandler = null;
+      state.placeholder = null;
+      state.movedNodes = null;
+      state.elementState = null;
+      state.originalBackground = null;
+      state.htmlAttributes = null;
+      state.bodyAttributes = null;
+
+      throw error;
+    }
+  }
+
+  function configurePipDocument(pipWindow, { backgroundColor, htmlAttributes, bodyAttributes }) {
+    logger.debug('Configuring PiP window document surface');
+
+    const pipDoc = pipWindow.document;
+
+    applyElementAttributes(pipDoc.documentElement, htmlAttributes);
+    applyElementAttributes(pipDoc.body, bodyAttributes);
+
+    pipDoc.title = document.title;
+    pipDoc.documentElement.classList.add('pipx-html');
+    pipDoc.body.classList.add('pipx-body');
+    pipDoc.body.style.margin = '0';
+    pipDoc.body.style.padding = '0';
+    pipDoc.body.style.minHeight = '100%';
+
+    if (backgroundColor) {
+      if (!pipDoc.documentElement.style.backgroundColor) {
+        pipDoc.documentElement.style.backgroundColor = backgroundColor;
+      }
+      if (!pipDoc.body.style.backgroundColor) {
+        pipDoc.body.style.backgroundColor = backgroundColor;
+      }
+    }
+
+    copyStylesheets(pipDoc);
+    mirrorTitle(pipDoc);
+    injectPipStyles(pipDoc);
+
+    return pipDoc;
+  }
+
+  function setupDocumentMode({ pipWindow, body, backgroundColor, htmlAttributes, bodyAttributes }) {
     const fragment = document.createDocumentFragment();
     const movedNodes = [];
     while (body.firstChild) {
@@ -169,142 +505,213 @@
       document.documentElement?.setAttribute('data-pipx-active', 'true');
       body.setAttribute('data-pipx-state', 'placeholder');
 
-      preparePipWindow(
-        pipWindow,
-        fragment,
-        state.originalBackground,
-        state.htmlAttributes,
-        state.bodyAttributes
-      );
+      const pipDoc = configurePipDocument(pipWindow, {
+        backgroundColor,
+        htmlAttributes,
+        bodyAttributes
+      });
 
-      const pipHideHandler = () => {
-        if (state.isRestoring) return;
-        logger.warn('PiP window closed by user — restoring content');
-        restore('pip-window-closed');
-      };
-      pipWindow.addEventListener('pagehide', pipHideHandler);
+      pipDoc.body.appendChild(fragment);
 
-      const pipResizeHandler = () => {
-        lastKnownSize = {
-          width: pipWindow.innerWidth,
-          height: pipWindow.innerHeight
-        };
-        logger.debug('PiP window resized', lastKnownSize);
-      };
-      pipWindow.addEventListener('resize', pipResizeHandler);
+      const controls = createPipControls(pipDoc);
+      pipDoc.body.appendChild(controls);
 
-      state.placeholder = placeholder;
-      state.pipWindow = pipWindow;
-      state.scroll = previousScroll;
-      state.lastFocus = previousFocus;
-      state.pipHideHandler = pipHideHandler;
-      state.pipResizeHandler = pipResizeHandler;
-      state.movedNodes = movedNodes;
-
-      if (previousFocus && typeof previousFocus.focus === 'function') {
-        queueMicrotask(() => {
-          try {
-            previousFocus.focus({ preventScroll: true });
-          } catch (focusError) {
-            logger.warn('Failed to refocus previous element, focusing PiP window', focusError);
-            pipWindow.focus();
-          }
-        });
-      } else {
-        pipWindow.focus();
-      }
-
-      post({ type: 'PIP_STATE', state: 'open', trigger });
-      logger.info('PiP window initialised', { trigger });
+      return { placeholder, movedNodes, controls };
     } catch (error) {
-      logger.error('Failed to initialise PiP window', error);
-
-      try {
-        if (placeholder?.isConnected) {
-          placeholder.remove();
-        }
-      } catch (placeholderError) {
-        logger.warn('Unable to remove placeholder during failure', placeholderError);
+      restoreNodesToBody(body, movedNodes);
+      if (placeholder?.isConnected) {
+        placeholder.remove();
       }
+      document.documentElement?.removeAttribute('data-pipx-active');
+      body.removeAttribute('data-pipx-state');
+      throw error;
+    }
+  }
 
+  async function setupElementMode({
+    pipWindow,
+    body,
+    backgroundColor,
+    htmlAttributes,
+    bodyAttributes,
+    options
+  }) {
+    const target = await resolveTargetElement(options);
+    if (!target) {
+      throw new Error(
+        options.targetSelector
+          ? `PiP target element not found for selector "${options.targetSelector}"`
+          : 'PiP target element is not available'
+      );
+    }
+
+    const parent = target.parentNode;
+    if (!parent) {
+      throw new Error('PiP target element does not have a parent node');
+    }
+
+    const placeholder = createElementPlaceholder(target, options.placeholderMessage);
+    const nextSibling = target.nextSibling;
+
+    let container = null;
+    let controls = null;
+
+    try {
+      parent.insertBefore(placeholder, target);
+
+      document.documentElement?.setAttribute('data-pipx-active', 'true');
+      body.setAttribute('data-pipx-state', 'element-placeholder');
+
+      const pipDoc = configurePipDocument(pipWindow, {
+        backgroundColor,
+        htmlAttributes,
+        bodyAttributes
+      });
+
+      container = pipDoc.createElement('div');
+      container.id = 'pipx-element-root';
+      container.dataset.pipxMode = 'element';
+      container.style.display = 'flex';
+      container.style.flexDirection = 'column';
+      container.style.alignItems = 'stretch';
+      container.style.justifyContent = 'flex-start';
+      container.style.minHeight = '100%';
+      container.style.width = '100%';
+      pipDoc.body.appendChild(container);
+
+      container.appendChild(target);
+
+      controls = createPipControls(pipDoc);
+      pipDoc.body.appendChild(controls);
+
+      return { placeholder, parent, nextSibling, target, container, controls };
+    } catch (error) {
+      if (container?.isConnected) {
+        container.remove();
+      }
+      if (controls?.isConnected) {
+        controls.remove();
+      }
+      if (placeholder?.isConnected) {
+        placeholder.remove();
+      }
       document.documentElement?.removeAttribute('data-pipx-active');
       body.removeAttribute('data-pipx-state');
 
-      cleanupObservers();
-      if (state.pipControls) {
-        state.pipControls.remove();
-        state.pipControls = null;
-      }
-
-      try {
-        movedNodes.forEach((node) => {
-          const ownerDoc = node.ownerDocument;
-          if (ownerDoc && ownerDoc !== document) {
-            body.appendChild(document.adoptNode(node));
-          } else {
-            body.appendChild(node);
-          }
-        });
-      } catch (restoreError) {
-        logger.warn('Unable to move nodes back into body', restoreError);
-      }
-
-      try {
-        if (pipWindow && !pipWindow.closed) {
-          pipWindow.close();
+      if (parent && target) {
+        try {
+          const adopted = target.ownerDocument === document ? target : document.adoptNode(target);
+          parent.insertBefore(adopted, nextSibling ?? null);
+        } catch (restoreError) {
+          logger.warn('Unable to restore target element after failure', restoreError);
         }
-      } catch (closeError) {
-        logger.warn('Unable to close PiP window after failure', closeError);
       }
-
-      state.placeholder = null;
-      state.movedNodes = null;
-      state.originalBackground = null;
-      state.htmlAttributes = null;
-      state.bodyAttributes = null;
 
       throw error;
     }
   }
 
-  function preparePipWindow(
-    pipWindow,
-    fragment,
-    backgroundColor,
-    htmlAttributes,
-    bodyAttributes
-  ) {
-    logger.debug('Preparing PiP window document');
-
-    const pipDoc = pipWindow.document;
-
-    applyElementAttributes(pipDoc.documentElement, htmlAttributes);
-    applyElementAttributes(pipDoc.body, bodyAttributes);
-
-    pipDoc.title = document.title;
-    pipDoc.documentElement.classList.add('pipx-html');
-    pipDoc.body.classList.add('pipx-body');
-    pipDoc.body.style.margin = '0';
-    pipDoc.body.style.padding = '0';
-
-    if (backgroundColor) {
-      if (!pipDoc.documentElement.style.backgroundColor) {
-        pipDoc.documentElement.style.backgroundColor = backgroundColor;
+  function restoreNodesToBody(body, nodes) {
+    if (!Array.isArray(nodes) || !body) return;
+    nodes.forEach((node) => {
+      try {
+        const ownerDoc = node.ownerDocument;
+        const restored = ownerDoc && ownerDoc !== document ? document.adoptNode(node) : node;
+        body.appendChild(restored);
+      } catch (error) {
+        logger.warn('Failed to restore node back to document body', error);
       }
-      if (!pipDoc.body.style.backgroundColor) {
-        pipDoc.body.style.backgroundColor = backgroundColor;
+    });
+  }
+
+  function restoreDocumentMode(body) {
+    if (state.placeholder?.isConnected) {
+      try {
+        state.placeholder.remove();
+      } catch (error) {
+        logger.warn('Unable to remove placeholder during document restore', error);
+      }
+    }
+    state.placeholder = null;
+
+    restoreNodesToBody(body, state.movedNodes);
+    state.movedNodes = null;
+
+    document.documentElement?.removeAttribute('data-pipx-active');
+    body?.removeAttribute('data-pipx-state');
+    state.elementState = null;
+  }
+
+  function restoreElementMode(body) {
+    const info = state.elementState;
+    if (!info) {
+      document.documentElement?.removeAttribute('data-pipx-active');
+      body?.removeAttribute('data-pipx-state');
+      return;
+    }
+
+    const { target, parent, nextSibling, placeholder, container } = info;
+
+    let restored = target;
+    if (target && target.ownerDocument !== document) {
+      try {
+        restored = document.adoptNode(target);
+      } catch (error) {
+        logger.warn('Failed to adopt target element back into main document', error);
+        restored = target;
       }
     }
 
-    copyStylesheets(pipDoc);
-    mirrorTitle(pipDoc);
-    injectPipStyles(pipDoc);
+    if (restored && parent) {
+      try {
+        if (placeholder?.parentNode === parent) {
+          placeholder.replaceWith(restored);
+        } else {
+          parent.insertBefore(restored, nextSibling ?? null);
+        }
+      } catch (error) {
+        logger.error('Unable to restore target element to its original parent', error);
+        try {
+          body?.appendChild(restored);
+        } catch (fallbackError) {
+          logger.error('Fallback restoration failed for element mode', fallbackError);
+        }
+      }
+    } else if (restored && body) {
+      try {
+        body.appendChild(restored);
+      } catch (error) {
+        logger.error('Unable to append restored target element to body', error);
+      }
+    }
 
-    pipDoc.body.appendChild(fragment);
+    if (placeholder?.isConnected) {
+      placeholder.remove();
+    }
+    if (container?.isConnected) {
+      container.remove();
+    }
 
-    const controls = createPipControls(pipDoc);
-    pipDoc.body.appendChild(controls);
-    state.pipControls = controls;
+    if (restored) {
+      state.lastOptions = {
+        ...state.lastOptions,
+        targetElement: restored
+      };
+    }
+
+    state.elementState = null;
+    document.documentElement?.removeAttribute('data-pipx-active');
+    body?.removeAttribute('data-pipx-state');
+    state.movedNodes = null;
+    state.placeholder = null;
+  }
+
+  function rollbackDocumentMode(body) {
+    restoreDocumentMode(body);
+  }
+
+  function rollbackElementMode(body) {
+    restoreElementMode(body);
   }
 
   function restore(trigger) {
@@ -315,42 +722,24 @@
 
     state.restorePromise = (async () => {
       state.isRestoring = true;
-      logger.info('Restoring tab content from PiP', { trigger });
+      const activeMode = state.mode;
+      logger.info('Restoring tab content from PiP', { trigger, mode: activeMode });
 
       const body = document.body || (await waitForBody());
       const pipWindow = state.pipWindow;
 
-      if (state.placeholder) {
-        try {
-          state.placeholder.remove();
-        } catch (placeholderError) {
-          logger.warn('Unable to remove placeholder during restore', placeholderError);
-        }
+      if (activeMode === PIP_MODE_ELEMENT) {
+        restoreElementMode(body);
+      } else {
+        restoreDocumentMode(body);
       }
-      state.placeholder = null;
-
-      body?.removeAttribute('data-pipx-state');
-      document.documentElement?.removeAttribute('data-pipx-active');
-
-      const movedNodes = state.movedNodes || [];
-      if (body && movedNodes.length) {
-        movedNodes.forEach((node) => {
-          try {
-            const ownerDoc = node.ownerDocument;
-            if (ownerDoc && ownerDoc !== document) {
-              body.appendChild(document.adoptNode(node));
-            } else {
-              body.appendChild(node);
-            }
-          } catch (error) {
-            logger.warn('Failed to move node back into main document', error);
-          }
-        });
-      }
-      state.movedNodes = null;
 
       if (state.pipControls) {
-        state.pipControls.remove();
+        try {
+          state.pipControls.remove();
+        } catch (error) {
+          logger.debug('Unable to remove PiP controls during restore', error);
+        }
         state.pipControls = null;
       }
 
@@ -401,8 +790,11 @@
       }
       state.lastFocus = null;
 
-      post({ type: 'PIP_STATE', state: 'closed', trigger });
-      logger.info('Tab content restored', { trigger });
+      post({ type: 'PIP_STATE', state: 'closed', trigger, mode: activeMode });
+      logger.info('Tab content restored', { trigger, mode: activeMode });
+
+      const fallbackMode = state.lastOptions?.mode ?? PIP_MODE_DOCUMENT;
+      state.mode = fallbackMode;
     })().finally(() => {
       state.isRestoring = false;
       state.restorePromise = null;
@@ -440,6 +832,31 @@
     wrapper.appendChild(card);
 
     return wrapper;
+  }
+
+  function createElementPlaceholder(target, customMessage) {
+    logger.debug('Creating placeholder for element-mode PiP', {
+      hasCustomMessage: Boolean(customMessage)
+    });
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'pipx-element-placeholder';
+    placeholder.setAttribute('role', 'status');
+    placeholder.style.minHeight = `${Math.max(1, target.clientHeight || 0)}px`;
+    placeholder.style.minWidth = `${Math.max(1, target.clientWidth || 0)}px`;
+    placeholder.style.borderRadius = getComputedStyle(target).borderRadius || '0px';
+    placeholder.style.border = '1px dashed rgba(100, 116, 139, 0.35)';
+    placeholder.style.display = 'grid';
+    placeholder.style.placeItems = 'center';
+    placeholder.style.background = 'rgba(148, 163, 184, 0.08)';
+    placeholder.style.color = 'rgba(30, 41, 59, 0.65)';
+    placeholder.style.fontFamily = 'Inter, "Segoe UI", sans-serif';
+    placeholder.style.fontSize = '0.9rem';
+    placeholder.style.padding = '1.25rem';
+    placeholder.style.boxSizing = 'border-box';
+    placeholder.textContent = customMessage?.trim() || 'Этот блок открыт в окне PiP.';
+
+    return placeholder;
   }
 
   function createPipControls(pipDoc) {

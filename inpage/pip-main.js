@@ -32,7 +32,7 @@
   const DEFAULT_TARGET_WAIT_MS = 1500;
   const FORCED_DOCUMENT_TRIGGERS = new Set(['action', 'command', 'extension', 'page-request']);
   const WINDOW_WIDTH_PADDING = 32;
-  const WINDOW_HEIGHT_PADDING = 120;
+  const WINDOW_HEIGHT_PADDING = 160;
   const MIN_WINDOW_WIDTH = 320;
   const MIN_WINDOW_HEIGHT = 200;
 
@@ -272,9 +272,24 @@
     if (!element || typeof element.getBoundingClientRect !== 'function') return null;
     const rect = element.getBoundingClientRect();
     if (!rect) return null;
+    let marginX = 0;
+    let marginY = 0;
+    try {
+      const style = window.getComputedStyle(element);
+      if (style) {
+        marginX =
+          parseFloat(style.marginLeft || '0') +
+          parseFloat(style.marginRight || '0');
+        marginY =
+          parseFloat(style.marginTop || '0') +
+          parseFloat(style.marginBottom || '0');
+      }
+    } catch (error) {
+      logger.debug('Unable to compute element margins', error);
+    }
     return {
-      width: Math.max(0, Math.round(rect.width)),
-      height: Math.max(0, Math.round(rect.height))
+      width: Math.max(0, Math.round(rect.width + marginX)),
+      height: Math.max(0, Math.round(rect.height + marginY))
     };
   }
 
@@ -365,6 +380,34 @@
       await delay(waitMs);
       updateFromScroll();
     }
+
+    const finalFit = () => {
+      const docEl = pipDoc.documentElement;
+      const body = pipDoc.body;
+
+      const contentWidth = Math.max(
+        latestRect.width,
+        docEl?.scrollWidth ?? 0,
+        body?.scrollWidth ?? 0
+      );
+      const contentHeight = Math.max(
+        latestRect.height,
+        docEl?.scrollHeight ?? 0,
+        body?.scrollHeight ?? 0
+      );
+
+      const desiredRect = {
+        width: contentWidth,
+        height: contentHeight
+      };
+
+      latestRect = desiredRect;
+      latestSize = tryApplySize(latestRect) ?? latestSize;
+    };
+
+    finalFit();
+    await delay(120);
+    finalFit();
 
     return { windowSize: latestSize, contentRect: latestRect };
   }
@@ -768,7 +811,8 @@
       container.style.flexDirection = 'column';
       container.style.alignItems = 'stretch';
       container.style.justifyContent = 'flex-start';
-      container.style.minHeight = '100%';
+  container.style.minHeight = 'auto';
+  container.style.height = 'auto';
       container.style.width = '100%';
       pipDoc.body.appendChild(container);
 

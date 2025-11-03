@@ -31,6 +31,9 @@
   const DEFAULT_PIP_OPTIONS = Object.freeze({ mode: PIP_MODE_DOCUMENT });
   const DEFAULT_TARGET_WAIT_MS = 1500;
   const FORCED_DOCUMENT_TRIGGERS = new Set(['action', 'command', 'extension', 'page-request']);
+  const WINDOW_SIZE_PADDING = 32;
+  const MIN_WINDOW_WIDTH = 320;
+  const MIN_WINDOW_HEIGHT = 200;
 
   if (window.__interactiveTabPiP) {
     logger.debug('PiP controller already initialised');
@@ -229,6 +232,26 @@
     });
   }
 
+  function calculatePreferredWindowSize(rect) {
+    if (!rect) return null;
+    const padding = WINDOW_SIZE_PADDING;
+    const desiredWidth = rect.width + padding;
+    const desiredHeight = rect.height + padding;
+
+    const screenWidth = window.screen?.availWidth ?? window.innerWidth ?? 1280;
+    const screenHeight = window.screen?.availHeight ?? window.innerHeight ?? 720;
+
+    const maxWidth = Math.max(MIN_WINDOW_WIDTH, screenWidth - 20);
+    const maxHeight = Math.max(MIN_WINDOW_HEIGHT, screenHeight - 20);
+
+    const width = clamp(desiredWidth, MIN_WINDOW_WIDTH, maxWidth);
+    const height = clamp(desiredHeight, MIN_WINDOW_HEIGHT, maxHeight);
+
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+
+    return { width, height };
+  }
+
   function captureElementRect(element) {
     if (!element || typeof element.getBoundingClientRect !== 'function') return null;
     const rect = element.getBoundingClientRect();
@@ -258,34 +281,29 @@
     if (!rect) {
       rect = measure();
     }
-    if (!rect || rect.width < 10 || rect.height < 10) {
-      await delay(32);
+
+    const waitSchedule = [32, 48, 64];
+    for (const waitMs of waitSchedule) {
+      if (rect && rect.width >= 10 && rect.height >= 10) break;
+      await delay(waitMs);
       rect = measure();
     }
+
     if (!rect || rect.width < 10 || rect.height < 10) {
       logger.debug('Skipping auto resize — element rect is too small');
       return null;
     }
 
-    const padding = 32; // provide breathing room around element
-    const desiredWidth = rect.width + padding;
-    const desiredHeight = rect.height + padding;
-
-    const screenWidth = window.screen?.availWidth ?? window.innerWidth ?? 1280;
-    const screenHeight = window.screen?.availHeight ?? window.innerHeight ?? 720;
-
-    const minWidth = 320;
-    const minHeight = 200;
-    const maxWidth = Math.max(minWidth, screenWidth - 20);
-    const maxHeight = Math.max(minHeight, screenHeight - 20);
-
-    const targetWidth = clamp(desiredWidth, minWidth, maxWidth);
-    const targetHeight = clamp(desiredHeight, minHeight, maxHeight);
+    const preferredSize = calculatePreferredWindowSize(rect);
+    if (!preferredSize) {
+      logger.debug('Unable to calculate preferred size for element rect', rect);
+      return null;
+    }
 
     try {
-      pipWindow.resizeTo(targetWidth, targetHeight);
-      lastKnownSize = { width: targetWidth, height: targetHeight };
-      logger.debug('Auto-resized PiP window to element', { targetWidth, targetHeight });
+      pipWindow.resizeTo(preferredSize.width, preferredSize.height);
+      lastKnownSize = { ...preferredSize };
+      logger.debug('Auto-resized PiP window to element', preferredSize);
       return lastKnownSize;
     } catch (error) {
       logger.warn('Failed to resize PiP window to match element', error);
@@ -361,12 +379,41 @@
 
   async function open(trigger, options) {
     const pipWindowOptions = { preferInitialWindowPlacement: true };
-    if (lastKnownSize) {
+    let resolvedTarget = null;
+    let originalRect = null;
+    let preferredSize = null;
+
+    if (options.mode === PIP_MODE_ELEMENT) {
+      resolvedTarget = await resolveTargetElement(options);
+      if (!resolvedTarget) {
+        throw new Error(
+          options.targetSelector
+            ? `PiP target element not found for selector "${options.targetSelector}"`
+            : 'PiP target element is not available'
+        );
+      }
+
+      originalRect = captureElementRect(resolvedTarget);
+      preferredSize = calculatePreferredWindowSize(originalRect);
+      if (preferredSize) {
+        pipWindowOptions.width = preferredSize.width;
+        pipWindowOptions.height = preferredSize.height;
+      } else if (lastKnownSize) {
+        pipWindowOptions.width = lastKnownSize.width;
+        pipWindowOptions.height = lastKnownSize.height;
+      }
+    } else if (lastKnownSize) {
       pipWindowOptions.width = lastKnownSize.width;
       pipWindowOptions.height = lastKnownSize.height;
     }
 
-    logger.info('Opening PiP window', { trigger, requestOptions: pipWindowOptions });
+    logger.info('Opening PiP window', {
+      trigger,
+      requestOptions: pipWindowOptions,
+      hasResolvedTarget: Boolean(resolvedTarget),
+      preferredSize,
+      originalRect
+    });
 
     let pipWindow;
     try {
@@ -375,6 +422,12 @@
         width: pipWindow.innerWidth,
         height: pipWindow.innerHeight
       });
+      if (preferredSize) {
+        lastKnownSize = {
+          width: pipWindow.innerWidth,
+          height: pipWindow.innerHeight
+        };
+      }
     } catch (error) {
       logger.error('requestWindow failed', error);
       showUnsupportedNotice();
@@ -408,7 +461,9 @@
           backgroundColor,
           htmlAttributes,
           bodyAttributes,
-          options
+          options,
+          resolvedTarget,
+          originalRect
         });
 
         state.placeholder = null;
@@ -424,7 +479,7 @@
           placeholder: elementContext.placeholder,
           container: elementContext.container,
           selector: options.targetSelector ?? null,
-          rect: elementContext.rect ?? null
+          rect: elementContext.rect ?? originalRect ?? null
         };
         state.lastOptions = {
           ...state.lastOptions,
@@ -606,9 +661,11 @@
     backgroundColor,
     htmlAttributes,
     bodyAttributes,
-    options
+    options,
+    resolvedTarget = null,
+    originalRect = null
   }) {
-    const target = await resolveTargetElement(options);
+    const target = resolvedTarget ?? (await resolveTargetElement(options));
     if (!target) {
       throw new Error(
         options.targetSelector
@@ -617,13 +674,13 @@
       );
     }
 
-    const originalRect = captureElementRect(target);
+    const elementRect = originalRect ?? captureElementRect(target);
     const parent = target.parentNode;
     if (!parent) {
       throw new Error('PiP target element does not have a parent node');
     }
 
-    const placeholder = createElementPlaceholder(target, options.placeholderMessage, originalRect);
+    const placeholder = createElementPlaceholder(target, options.placeholderMessage, elementRect);
     const nextSibling = target.nextSibling;
 
     let container = null;
@@ -657,9 +714,9 @@
       controls = createPipControls(pipDoc);
       pipDoc.body.appendChild(controls);
 
-  await autoResizePipWindowToElement(pipWindow, container, originalRect);
+  await autoResizePipWindowToElement(pipWindow, container, elementRect);
 
-  return { placeholder, parent, nextSibling, target, container, controls, rect: originalRect };
+  return { placeholder, parent, nextSibling, target, container, controls, rect: elementRect };
     } catch (error) {
       if (container?.isConnected) {
         container.remove();

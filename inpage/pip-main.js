@@ -76,6 +76,13 @@
     return 'documentPictureInPicture' in window;
   }
 
+  function clamp(value, min, max) {
+    if (Number.isNaN(value)) return min;
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+  }
+
   function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && value.constructor === Object;
   }
@@ -222,6 +229,70 @@
     });
   }
 
+  function captureElementRect(element) {
+    if (!element || typeof element.getBoundingClientRect !== 'function') return null;
+    const rect = element.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      width: Math.max(0, Math.round(rect.width)),
+      height: Math.max(0, Math.round(rect.height))
+    };
+  }
+
+  async function autoResizePipWindowToElement(pipWindow, container, preferredRect) {
+    if (!pipWindow || typeof pipWindow.resizeTo !== 'function') return null;
+
+    const measure = () => {
+      if (!container || typeof container.getBoundingClientRect !== 'function') return null;
+      const rect = container.getBoundingClientRect();
+      if (!rect) return null;
+      return {
+        width: Math.max(0, Math.round(rect.width)),
+        height: Math.max(0, Math.round(rect.height))
+      };
+    };
+
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    let rect = preferredRect && preferredRect.width > 0 && preferredRect.height > 0 ? { ...preferredRect } : null;
+    if (!rect) {
+      rect = measure();
+    }
+    if (!rect || rect.width < 10 || rect.height < 10) {
+      await delay(32);
+      rect = measure();
+    }
+    if (!rect || rect.width < 10 || rect.height < 10) {
+      logger.debug('Skipping auto resize — element rect is too small');
+      return null;
+    }
+
+    const padding = 32; // provide breathing room around element
+    const desiredWidth = rect.width + padding;
+    const desiredHeight = rect.height + padding;
+
+    const screenWidth = window.screen?.availWidth ?? window.innerWidth ?? 1280;
+    const screenHeight = window.screen?.availHeight ?? window.innerHeight ?? 720;
+
+    const minWidth = 320;
+    const minHeight = 200;
+    const maxWidth = Math.max(minWidth, screenWidth - 20);
+    const maxHeight = Math.max(minHeight, screenHeight - 20);
+
+    const targetWidth = clamp(desiredWidth, minWidth, maxWidth);
+    const targetHeight = clamp(desiredHeight, minHeight, maxHeight);
+
+    try {
+      pipWindow.resizeTo(targetWidth, targetHeight);
+      lastKnownSize = { width: targetWidth, height: targetHeight };
+      logger.debug('Auto-resized PiP window to element', { targetWidth, targetHeight });
+      return lastKnownSize;
+    } catch (error) {
+      logger.warn('Failed to resize PiP window to match element', error);
+      return null;
+    }
+  }
+
   window.addEventListener('message', handleIncomingMessage, false);
 
   window.__interactiveTabPiP = {
@@ -352,7 +423,8 @@
           nextSibling: elementContext.nextSibling,
           placeholder: elementContext.placeholder,
           container: elementContext.container,
-          selector: options.targetSelector ?? null
+          selector: options.targetSelector ?? null,
+          rect: elementContext.rect ?? null
         };
         state.lastOptions = {
           ...state.lastOptions,
@@ -545,12 +617,13 @@
       );
     }
 
+    const originalRect = captureElementRect(target);
     const parent = target.parentNode;
     if (!parent) {
       throw new Error('PiP target element does not have a parent node');
     }
 
-    const placeholder = createElementPlaceholder(target, options.placeholderMessage);
+    const placeholder = createElementPlaceholder(target, options.placeholderMessage, originalRect);
     const nextSibling = target.nextSibling;
 
     let container = null;
@@ -584,7 +657,9 @@
       controls = createPipControls(pipDoc);
       pipDoc.body.appendChild(controls);
 
-      return { placeholder, parent, nextSibling, target, container, controls };
+  await autoResizePipWindowToElement(pipWindow, container, originalRect);
+
+  return { placeholder, parent, nextSibling, target, container, controls, rect: originalRect };
     } catch (error) {
       if (container?.isConnected) {
         container.remove();
@@ -834,27 +909,36 @@
     return wrapper;
   }
 
-  function createElementPlaceholder(target, customMessage) {
+  function createElementPlaceholder(target, customMessage, rect) {
     logger.debug('Creating placeholder for element-mode PiP', {
       hasCustomMessage: Boolean(customMessage)
     });
 
-    const placeholder = document.createElement('div');
+    const placeholder = document.createElement('section');
     placeholder.className = 'pipx-element-placeholder';
     placeholder.setAttribute('role', 'status');
-    placeholder.style.minHeight = `${Math.max(1, target.clientHeight || 0)}px`;
-    placeholder.style.minWidth = `${Math.max(1, target.clientWidth || 0)}px`;
-    placeholder.style.borderRadius = getComputedStyle(target).borderRadius || '0px';
-    placeholder.style.border = '1px dashed rgba(100, 116, 139, 0.35)';
-    placeholder.style.display = 'grid';
-    placeholder.style.placeItems = 'center';
-    placeholder.style.background = 'rgba(148, 163, 184, 0.08)';
-    placeholder.style.color = 'rgba(30, 41, 59, 0.65)';
-    placeholder.style.fontFamily = 'Inter, "Segoe UI", sans-serif';
-    placeholder.style.fontSize = '0.9rem';
-    placeholder.style.padding = '1.25rem';
-    placeholder.style.boxSizing = 'border-box';
-    placeholder.textContent = customMessage?.trim() || 'Этот блок открыт в окне PiP.';
+    placeholder.style.minHeight = `${Math.max(160, rect?.height ?? target?.clientHeight ?? 0)}px`;
+    placeholder.style.width = '100%';
+
+    const card = document.createElement('div');
+    card.className = 'pipx-card pipx-element-card';
+
+    const title = document.createElement('h3');
+    title.className = 'pipx-element-title';
+    title.textContent = 'Блок открыт в плавающем окне';
+
+    const text = document.createElement('p');
+    text.className = 'pipx-element-text';
+    text.textContent = customMessage?.trim() || 'Этот блок сейчас отображается в окне «картинка в картинке». Закройте PiP, чтобы вернуть содержимое на страницу.';
+
+    const hint = document.createElement('p');
+    hint.className = 'pipx-element-hint';
+    hint.textContent = 'Горячая клавиша: Alt+Shift+P (или ⌥⇧P на Mac).';
+
+    card.appendChild(title);
+    card.appendChild(text);
+    card.appendChild(hint);
+    placeholder.appendChild(card);
 
     return placeholder;
   }

@@ -2,38 +2,44 @@
   "manifest_version": 3,
   "name": "DAO Tools+",
   "description": "Центр инструментов DAO: запуск PiP, интеграция с PlanFix и Syrve, а также будущие утилиты для работы.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "minimum_chrome_version": "116",
   "action": {
-    "default_title": "Открыть DAO Tools+",
+    "default_title": "Planfix To Syrve",
     "default_icon": {
       "16": "icons/icon16.png"
-    }
+    },
+    "default_popup": "planfix/popup.html"
   },
   "icons": {
     "16": "icons/icon16.png"
   },
   "permissions": [
-    "activeTab"
+    "storage"
   ],
   "host_permissions": [
+    "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install/*",
     "https://hub.daolog.net/*",
-    "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install*"
+    "https://dao.planfix.ua/*"
   ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
   "content_scripts": [
     {
       "matches": [
-        "https://hub.daolog.net/*",
-        "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install*"
+        "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install/*",
+        "https://hub.daolog.net/*"
       ],
       "js": [
         "content/bridge.js"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://dao.planfix.ua/*"
+      ],
+      "js": [
+        "content/planfix.js"
+      ]
     }
   ],
   "web_accessible_resources": [
@@ -43,8 +49,8 @@
         "inpage/pip-placeholder.css"
       ],
       "matches": [
-        "https://hub.daolog.net/*",
-        "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install*"
+        "https://studio--studio-1696970562-bd013.us-central1.hosted.app/*",
+        "https://hub.daolog.net/*"
       ]
     }
   ]

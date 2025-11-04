@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Client Config</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    input, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+    }
+    #modeContainer {
+      margin-top: 20px;
+    }
+    #errorMessage {
+      margin-top: 10px;
+      color: red;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h3>Client Settings</h3>
+  <input type="text" id="inputField" placeholder="Enter Client ID...">
+  <button id="saveButton">Save Client ID</button>
+
+  <h3>One-time open backoffice/chain</h3>
+  <input type="text" id="serverField" placeholder="Enter server address...">
+  <input type="text" id="portField" placeholder="Enter port...">
+  <button id="sendDataButton">Manual open Backoffice/Chain</button>
+
+  <div id="modeContainer">
+    <h3>Mode Management</h3>
+    <p id="modeInfo">Fetching current mode...</p>
+    <button id="toggleModeButton">Toggle Mode</button>
+  </div>
+
+  <div id="errorContainer">
+    <h3>Error Info</h3>
+    <button id="showErrorButton">Get last error</button>
+    <div id="errorMessage"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

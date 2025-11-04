@@ -46,6 +46,8 @@ const log = createLogger('background', 'info');
 const TAB_STATE = new Map();
 // Набор протоколов URL, на которых разрешена активация расширения.
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
+const PLANFIX_URL_PATTERN = /^https:\/\/dao\.planfix\.ua\//;
+const PLANFIX_POPUP_PATH = 'planfix/popup.html';
 
 // Событие, срабатывающее при установке или обновлении расширения.
 chrome.runtime.onInstalled.addListener(() => {
@@ -54,6 +56,23 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.action.setBadgeBackgroundColor({ color: '#2563EB' });
   // Изначально бейдж пуст.
   chrome.action.setBadgeText({ text: '' });
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab?.id !== undefined) {
+        syncActionPopup(tab.id, tab.url);
+      }
+    }
+  });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab?.id !== undefined) {
+        syncActionPopup(tab.id, tab.url);
+      }
+    }
+  });
 });
 
 /**
@@ -77,6 +96,28 @@ function isSupportedUrl(url) {
   } catch (error) {
     log.warn('Unable to parse tab URL — treating as unsupported', { url, error });
     return false;
+  }
+}
+
+function isPlanfixUrl(url) {
+  return typeof url === 'string' && PLANFIX_URL_PATTERN.test(url);
+}
+
+async function syncActionPopup(tabId, urlHint) {
+  if (tabId === undefined) return;
+
+  try {
+    let url = typeof urlHint === 'string' ? urlHint : undefined;
+    if (!url) {
+      const tab = await chrome.tabs.get(tabId);
+      url = tab?.url ?? '';
+    }
+    const popupPath = isPlanfixUrl(url) ? PLANFIX_POPUP_PATH : '';
+    await chrome.action.setPopup({ tabId, popup: popupPath });
+    log.debug('Action popup synced', { tabId, url, popup: popupPath || null });
+  } catch (error) {
+    const message = chrome.runtime.lastError?.message ?? error?.message ?? String(error);
+    log.warn('Failed to sync action popup', { tabId, error: message });
   }
 }
 
@@ -117,6 +158,11 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 
   log.info('Toolbar icon clicked', { tabId: tab.id, url: tab.url, trigger: 'action' });
+
+  if (isPlanfixUrl(tab.url)) {
+    log.debug('Toolbar click ignored on Planfix tab — popup handles interaction');
+    return;
+  }
 
   // Если URL не поддерживается, сообщаем пользователю через бейдж.
   if (!isSupportedUrl(tab.url)) {
@@ -195,6 +241,14 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url !== undefined) {
+    syncActionPopup(tabId, changeInfo.url);
+  } else if (changeInfo.status === 'complete') {
+    syncActionPopup(tabId, tab?.url);
+  }
+});
+
 // Обработчик закрытия вкладки.
 chrome.tabs.onRemoved.addListener((tabId) => {
   // Если для закрытой вкладки было состояние PiP, удаляем его, чтобы избежать утечек памяти.
@@ -208,6 +262,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
   log.debug('Tab activated, refreshing badge', { tabId });
   // Обновляем бейдж, чтобы он соответствовал состоянию новой активной вкладки.
   updateBadge(tabId);
+  syncActionPopup(tabId);
 });
 
 /**

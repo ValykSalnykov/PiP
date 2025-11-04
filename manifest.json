@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Interactive Tab Picture-in-Picture",
-  "description": "Открывает активную вкладку в интерактивном окне «картинка в картинке», которое всегда поверх других окон.",
+  "name": "DAO Tools+",
+  "description": "Центр инструментов DAO: запуск PiP, интеграция с PlanFix и Syrve, а также будущие утилиты для работы.",
   "version": "1.1.0",
   "minimum_chrome_version": "116",
   "action": {
-    "default_title": "Открыть вкладку в PiP",
+    "default_title": "Открыть DAO Tools+",
     "default_icon": {
       "16": "icons/icon16.png"
     }
@@ -16,22 +16,19 @@
   "permissions": [
     "activeTab"
   ],
+  "host_permissions": [
+    "https://hub.daolog.net/*",
+    "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "commands": {
-    "toggle-pip": {
-      "suggested_key": {
-        "default": "Alt+Shift+P"
-      },
-      "description": "Переключить режим PiP для текущей вкладки"
-    }
-  },
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://hub.daolog.net/*",
+        "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install*"
       ],
       "js": [
         "content/bridge.js"
@@ -46,7 +43,8 @@
         "inpage/pip-placeholder.css"
       ],
       "matches": [
-        "<all_urls>"
+        "https://hub.daolog.net/*",
+        "https://studio--studio-1696970562-bd013.us-central1.hosted.app/syrve-install*"
       ]
     }
   ]

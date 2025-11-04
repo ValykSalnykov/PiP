@@ -7,13 +7,43 @@ const modeInfo = document.getElementById("modeInfo");
 const toggleModeButton = document.getElementById("toggleModeButton");
 const showErrorButton = document.getElementById("showErrorButton");
 const errorMessage = document.getElementById("errorMessage");
+const clientStatus = document.getElementById("clientStatus");
+const clientIdBadge = document.getElementById("clientIdBadge");
+const editClientBtn = document.getElementById("editClientBtn");
+const clientSettingsCard = document.getElementById("clientSettingsCard");
+
+const updateClientIdUI = (value) => {
+  const normalized = (value || "").trim();
+  const hasValue = normalized.length > 0;
+
+  if (hasValue) {
+    clientIdBadge.textContent = normalized;
+    clientStatus?.classList.remove("is-hidden");
+    clientSettingsCard?.classList.add("card--collapsed");
+  } else {
+    clientIdBadge.textContent = "";
+    clientStatus?.classList.add("is-hidden");
+    clientSettingsCard?.classList.remove("card--collapsed");
+  }
+};
 
 // Завантаження Client ID
 chrome.storage.local.get(['userInput'], (result) => {
-  if (result.userInput) {
-    inputField.value = result.userInput;
-    fetchMode(result.userInput);
+  const stored = result.userInput || "";
+  if (stored) {
+    inputField.value = stored;
+    updateClientIdUI(stored);
+    fetchMode(stored);
+  } else {
+    updateClientIdUI("");
   }
+});
+
+editClientBtn?.addEventListener("click", () => {
+  clientSettingsCard?.classList.remove("card--collapsed");
+  clientStatus?.classList.add("is-hidden");
+  inputField.focus();
+  inputField.select();
 });
 
 // Збереження Client ID
@@ -24,6 +54,7 @@ saveButton.addEventListener("click", () => {
     return;
   }
   chrome.storage.local.set({ userInput: inputValue }, () => {
+    updateClientIdUI(inputValue);
     alert("Client ID saved!");
     window.close();
   });
@@ -98,7 +129,7 @@ const fetchMode = async (clientId) => {
 
     if (response.ok) {
       const data = await response.json();
-      modeInfo.textContent = `Current Mode: ${data.description}`;
+      modeInfo.textContent = `Текущий режим: ${data.description}`;
     } else {
       modeInfo.textContent = "Error fetching mode.";
     }
@@ -126,10 +157,10 @@ toggleModeButton.addEventListener("click", async () => {
 
       if (response.ok) {
         const data = await response.json();
-        modeInfo.textContent = `Mode changed to: ${data.description}`;
-        alert(`Mode successfully changed to: ${data.description}`);
+        modeInfo.textContent = `Режим изменен на: ${data.description}`;
+        alert(`Режим успешно изменен на: ${data.description}`);
       } else {
-        alert("Error toggling mode.");
+        alert("Ошибка при переключении режима.");
       }
     } catch (error) {
       console.error("Error toggling mode:", error);

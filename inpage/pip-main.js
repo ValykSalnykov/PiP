@@ -92,28 +92,52 @@
 
   // Правила для конкретных сайтов
   const SITE_RULES = {
-    'hub.daolog.net': {
-      patterns: ['/TimeTracker'],
-      selector: '#root > div > div > div.tasks-page',
-      width: 390,
-      height: 500
-    }
+    'hub.daolog.net': [
+      {
+        patterns: ['/TimeTracker'],
+        selector: '#root > div > div > div.tasks-page',
+        width: 390,
+        height: 500
+      },
+      {
+        patterns: ['/InstallSyrve'],
+        selector: '#root > div > div > div.tasks-page',
+        mode: 'page',
+        width: 390,
+        height: 500,
+        lockSize: true
+      }
+    ]
   };
 
   function getSiteRule() {
     const hostname = window.location.hostname;
     const pathname = window.location.pathname;
-    
-    const rule = SITE_RULES[hostname];
-    if (!rule) return null;
-    
-    // Проверяем, подходит ли текущий путь под паттерны
-    if (rule.patterns && rule.patterns.length > 0) {
-      const matches = rule.patterns.some(pattern => pathname.includes(pattern));
-      if (!matches) return null;
+
+    const hostRules = SITE_RULES[hostname];
+    if (!hostRules) return null;
+
+    const normalizedRules = Array.isArray(hostRules) ? hostRules : [hostRules];
+    for (const rule of normalizedRules) {
+      if (rule.patterns && rule.patterns.length > 0) {
+        const matches = rule.patterns.some((pattern) => {
+          if (pattern instanceof RegExp) {
+            try {
+              return pattern.test(pathname);
+            } catch {
+              return false;
+            }
+          }
+          return pathname.includes(pattern);
+        });
+        if (!matches) {
+          continue;
+        }
+      }
+      return rule;
     }
-    
-    return rule;
+
+    return null;
   }
 
   function handleIncomingMessage(event) {
@@ -164,13 +188,13 @@
     const siteRule = getSiteRule();
     
     // Определяем финальные параметры
-    let finalMode = mode;
+    let finalMode = mode || siteRule?.mode || null;
     let finalElement = null;
-    let finalWidth = width;
-    let finalHeight = height;
+    let finalWidth = width ?? siteRule?.width ?? null;
+    let finalHeight = height ?? siteRule?.height ?? null;
 
     // Если передан селектор или есть правило для сайта с селектором
-  const selector = siteRule?.selector || targetSelector;
+    const selector = targetSelector || siteRule?.selector;
     if (selector) {
       try {
         const element = document.querySelector(selector);
@@ -194,44 +218,34 @@
       finalMode = finalElement ? 'element' : 'page';
     }
 
+    if (finalMode === 'element' && !finalElement) {
+      logger.warn('Element mode requested but no element resolved — falling back to page mode');
+      finalMode = 'page';
+    }
+
     // Если режим 'element-only' (из старого API), преобразуем в 'element'
     if (finalMode === 'element-only') {
       finalMode = 'element';
     }
+
+    const customSize = finalWidth && finalHeight ? { width: finalWidth, height: finalHeight } : null;
+    const lockSize = Boolean(siteRule?.lockSize);
 
     if (finalMode === 'element' && finalElement) {
       return openPip({ 
         mode: 'element', 
         element: finalElement, 
         trigger,
-        customSize: finalWidth && finalHeight ? { width: finalWidth, height: finalHeight } : null
+        customSize,
+        lockSize
       });
     }
 
-    return openPip({ mode: 'page', trigger });
+    return openPip({ mode: 'page', trigger, customSize, lockSize });
   }
 
   async function toggle(trigger) {
-    logger.info('Toggle requested', { trigger });
-
-    if (!isSupported()) {
-      logger.warn('Document Picture-in-Picture API is not available');
-      showUnsupportedNotice();
-      post({ type: 'PIP_UNSUPPORTED', reason: 'api-missing' });
-      return;
-    }
-
-    if (state.openPromise) {
-      logger.debug('Toggle skipped — open promise already in progress');
-      return state.openPromise;
-    }
-
-    if (state.pipWindow && !state.pipWindow.closed) {
-      logger.info('PiP already open, scheduling restore', { trigger });
-      return restore(trigger);
-    }
-
-    return openPip({ mode: 'page', trigger });
+    return toggleWithOptions({ trigger });
   }
 
   async function startElementSelection(trigger) {
@@ -396,8 +410,9 @@
       const customSize = siteRule?.width && siteRule?.height 
         ? { width: siteRule.width, height: siteRule.height }
         : null;
+      const lockSize = Boolean(siteRule?.lockSize);
       
-      openElementInPip(target, selectionTrigger, customSize).catch((error) => {
+      openElementInPip(target, selectionTrigger, customSize, lockSize).catch((error) => {
         logger.error('Failed to open selected element in PiP', error);
       });
     });
@@ -527,11 +542,11 @@
     return null;
   }
 
-  async function openElementInPip(element, trigger, customSize = null) {
-    return openPip({ mode: 'element', element, trigger, customSize });
+  async function openElementInPip(element, trigger, customSize = null, lockSize = false) {
+    return openPip({ mode: 'element', element, trigger, customSize, lockSize });
   }
 
-  async function openPip({ mode, element, trigger, customSize }) {
+  async function openPip({ mode, element, trigger, customSize, lockSize = false }) {
     if (!isSupported()) {
       logger.warn('Document Picture-in-Picture API is not available');
       showUnsupportedNotice();
@@ -690,7 +705,7 @@
           pipWindow.focus();
         }
 
-        if (mode === 'element') {
+        if (mode === 'element' && !lockSize) {
           queueMicrotask(() => {
             const activeWindow = state.pipWindow;
             const target = state.selectedElement;
@@ -702,6 +717,9 @@
             attachElementResizeObserver(activeWindow, target);
           });
         } else {
+          if (lockSize) {
+            logger.debug('Automatic PiP resizing disabled — size locked by rule');
+          }
           disconnectElementResizeObserver();
         }
 

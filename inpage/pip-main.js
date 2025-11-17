@@ -77,10 +77,44 @@
   window.addEventListener('message', handleIncomingMessage, false);
 
   window.__interactiveTabPiP = {
-    toggle: (trigger = 'page-call') => toggle(trigger),
+    toggle: (options = {}) => {
+      const trigger = options?.trigger ?? options ?? 'page-call';
+      const mode = options?.mode || null;
+      const targetSelector = options?.targetSelector || null;
+      const width = options?.width || null;
+      const height = options?.height || null;
+      
+      return toggleWithOptions({ trigger, mode, targetSelector, width, height });
+    },
     close: (trigger = 'page-call') => restore(trigger),
     isOpen: () => Boolean(state.pipWindow && !state.pipWindow.closed)
   };
+
+  // Правила для конкретных сайтов
+  const SITE_RULES = {
+    'hub.daolog.net': {
+      patterns: ['/TimeTracker'],
+      selector: '#root > div > div > div.tasks-page',
+      width: 390,
+      height: 500
+    }
+  };
+
+  function getSiteRule() {
+    const hostname = window.location.hostname;
+    const pathname = window.location.pathname;
+    
+    const rule = SITE_RULES[hostname];
+    if (!rule) return null;
+    
+    // Проверяем, подходит ли текущий путь под паттерны
+    if (rule.patterns && rule.patterns.length > 0) {
+      const matches = rule.patterns.some(pattern => pathname.includes(pattern));
+      if (!matches) return null;
+    }
+    
+    return rule;
+  }
 
   function handleIncomingMessage(event) {
     if (event.source !== window) return;
@@ -104,6 +138,77 @@
         });
       });
     }
+  }
+
+  async function toggleWithOptions({ trigger, mode, targetSelector, width, height }) {
+    logger.info('Toggle with options requested', { trigger, mode, targetSelector, width, height });
+
+    if (!isSupported()) {
+      logger.warn('Document Picture-in-Picture API is not available');
+      showUnsupportedNotice();
+      post({ type: 'PIP_UNSUPPORTED', reason: 'api-missing' });
+      return;
+    }
+
+    if (state.openPromise) {
+      logger.debug('Toggle skipped — open promise already in progress');
+      return state.openPromise;
+    }
+
+    if (state.pipWindow && !state.pipWindow.closed) {
+      logger.info('PiP already open, scheduling restore', { trigger });
+      return restore(trigger);
+    }
+
+    // Получаем правила для текущего сайта
+    const siteRule = getSiteRule();
+    
+    // Определяем финальные параметры
+    let finalMode = mode;
+    let finalElement = null;
+    let finalWidth = width;
+    let finalHeight = height;
+
+    // Если передан селектор или есть правило для сайта с селектором
+  const selector = siteRule?.selector || targetSelector;
+    if (selector) {
+      try {
+        const element = document.querySelector(selector);
+        if (element) {
+          finalMode = 'element';
+          finalElement = element;
+          // Используем размеры из правил или переданные параметры
+          finalWidth = finalWidth || siteRule?.width;
+          finalHeight = finalHeight || siteRule?.height;
+          logger.info('Element found by selector', { selector, width: finalWidth, height: finalHeight });
+        } else {
+          logger.warn('Element not found by selector', { selector });
+        }
+      } catch (error) {
+        logger.error('Invalid selector', { selector, error });
+      }
+    }
+
+    // Если режим не определен, используем режим 'element' если есть элемент, иначе 'page'
+    if (!finalMode) {
+      finalMode = finalElement ? 'element' : 'page';
+    }
+
+    // Если режим 'element-only' (из старого API), преобразуем в 'element'
+    if (finalMode === 'element-only') {
+      finalMode = 'element';
+    }
+
+    if (finalMode === 'element' && finalElement) {
+      return openPip({ 
+        mode: 'element', 
+        element: finalElement, 
+        trigger,
+        customSize: finalWidth && finalHeight ? { width: finalWidth, height: finalHeight } : null
+      });
+    }
+
+    return openPip({ mode: 'page', trigger });
   }
 
   async function toggle(trigger) {
@@ -285,7 +390,14 @@
         logger.warn('Selected element is no longer in the document, aborting PiP');
         return;
       }
-      openElementInPip(target, selectionTrigger).catch((error) => {
+      
+      // Проверяем, есть ли правило для текущего сайта
+      const siteRule = getSiteRule();
+      const customSize = siteRule?.width && siteRule?.height 
+        ? { width: siteRule.width, height: siteRule.height }
+        : null;
+      
+      openElementInPip(target, selectionTrigger, customSize).catch((error) => {
         logger.error('Failed to open selected element in PiP', error);
       });
     });
@@ -415,11 +527,11 @@
     return null;
   }
 
-  async function openElementInPip(element, trigger) {
-    return openPip({ mode: 'element', element, trigger });
+  async function openElementInPip(element, trigger, customSize = null) {
+    return openPip({ mode: 'element', element, trigger, customSize });
   }
 
-  async function openPip({ mode, element, trigger }) {
+  async function openPip({ mode, element, trigger, customSize }) {
     if (!isSupported()) {
       logger.warn('Document Picture-in-Picture API is not available');
       showUnsupportedNotice();
@@ -441,18 +553,27 @@
 
     state.openPromise = (async () => {
       const options = { preferInitialWindowPlacement: true };
-      const initialElementSize = mode === 'element' ? getElementPreferredPipSize(element) : null;
-
-      if (initialElementSize) {
-        options.width = initialElementSize.width;
-        options.height = initialElementSize.height;
-      } else if (lastKnownSize) {
-        options.width = lastKnownSize.width;
-        options.height = lastKnownSize.height;
+      
+      // Приоритет: customSize > initialElementSize > lastKnownSize > fallbackSize
+      if (customSize && customSize.width && customSize.height) {
+        const clamped = clampPipWindowSize(customSize.width, customSize.height);
+        options.width = clamped.width;
+        options.height = clamped.height;
+        logger.info('Using custom size for PiP window', { width: clamped.width, height: clamped.height });
       } else {
-        const fallbackSize = getDefaultPipWindowSize();
-        options.width = fallbackSize.width;
-        options.height = fallbackSize.height;
+        const initialElementSize = mode === 'element' ? getElementPreferredPipSize(element) : null;
+
+        if (initialElementSize) {
+          options.width = initialElementSize.width;
+          options.height = initialElementSize.height;
+        } else if (lastKnownSize) {
+          options.width = lastKnownSize.width;
+          options.height = lastKnownSize.height;
+        } else {
+          const fallbackSize = getDefaultPipWindowSize();
+          options.width = fallbackSize.width;
+          options.height = fallbackSize.height;
+        }
       }
 
       let pipWindow;
@@ -898,6 +1019,49 @@ body.pipx-body {
   overflow: auto;
   margin: 0;
   padding: 0;
+}
+
+/* Ensure tasks-page shows all content */
+.tasks-page {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 100% !important;
+  overflow: visible !important;
+  gap: 16px !important;
+}
+
+.tasks-page > * {
+  flex-shrink: 0 !important;
+}
+
+.tasks-page .pool-section {
+  width: 100% !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.tasks-page .pool-section .tasks-list {
+  display: block !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.tasks-page .pool-section + .pool-section,
+.tasks-page .pool-section:last-of-type,
+.tasks-page > div:nth-child(2),
+.tasks-page > div:last-child {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  height: auto !important;
+  max-height: none !important;
 }
 `;
     pipDoc.head.appendChild(style);

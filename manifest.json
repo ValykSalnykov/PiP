@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Interactive Tab Picture-in-Picture",
   "description": "Открывает активную вкладку в интерактивном окне «картинка в картинке», которое всегда поверх других окон.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "Открыть вкладку в PiP",

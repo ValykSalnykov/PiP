@@ -140,6 +140,88 @@
     return null;
   }
 
+  function resolveTargetElement(selector) {
+    if (!selector || typeof selector !== 'string') {
+      return null;
+    }
+
+    let matches;
+    try {
+      matches = Array.from(document.querySelectorAll(selector));
+    } catch (error) {
+      logger.error('Invalid selector received', { selector, error });
+      return null;
+    }
+
+    if (matches.length === 0) {
+      logger.warn('Element not found by selector', { selector });
+      return null;
+    }
+
+    if (matches.length === 1) {
+      logger.info('Element found by selector', { selector });
+      return { element: matches[0], matchedCount: 1 };
+    }
+
+    const ancestor = findSharedAncestor(matches);
+    if (ancestor && ancestor !== document.body && ancestor !== document.documentElement) {
+      logger.info('Multiple elements matched selector — using shared ancestor', {
+        selector,
+        matched: matches.length,
+        ancestorTag: ancestor.tagName?.toLowerCase() ?? null,
+        ancestorClass: ancestor.className || null
+      });
+      return {
+        element: ancestor,
+        matchedCount: matches.length,
+        usedAncestor: true
+      };
+    }
+
+    logger.warn('Selector matched multiple elements but no safe ancestor was found — falling back to page mode', {
+      selector,
+      matched: matches.length
+    });
+    return { element: null, matchedCount: matches.length, forceMode: 'page' };
+  }
+
+  function findSharedAncestor(elements) {
+    if (!elements || elements.length === 0) {
+      return null;
+    }
+
+    const chains = elements.map((element) => {
+      const lineage = [];
+      let current = element;
+      while (current && current.nodeType === Node.ELEMENT_NODE) {
+        lineage.push(current);
+        current = current.parentElement;
+      }
+      if (document.documentElement) {
+        lineage.push(document.documentElement);
+      }
+      return lineage;
+    });
+
+    let reference = chains[0] || null;
+    for (const chain of chains) {
+      if (!reference || chain.length < reference.length) {
+        reference = chain;
+      }
+    }
+    if (!reference) {
+      return null;
+    }
+
+    for (const candidate of reference) {
+      if (candidate && chains.every((chain) => chain.includes(candidate))) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
   function handleIncomingMessage(event) {
     if (event.source !== window) return;
     const data = event.data;
@@ -196,20 +278,17 @@
     // Если передан селектор или есть правило для сайта с селектором
     const selector = targetSelector || siteRule?.selector;
     if (selector) {
-      try {
-        const element = document.querySelector(selector);
-        if (element) {
+      const resolution = resolveTargetElement(selector);
+      if (resolution?.element) {
+        finalElement = resolution.element;
+        if (!finalMode || finalMode === 'element') {
           finalMode = 'element';
-          finalElement = element;
-          // Используем размеры из правил или переданные параметры
-          finalWidth = finalWidth || siteRule?.width;
-          finalHeight = finalHeight || siteRule?.height;
-          logger.info('Element found by selector', { selector, width: finalWidth, height: finalHeight });
-        } else {
-          logger.warn('Element not found by selector', { selector });
         }
-      } catch (error) {
-        logger.error('Invalid selector', { selector, error });
+        // Используем размеры из правил или переданные параметры
+        finalWidth = finalWidth || siteRule?.width;
+        finalHeight = finalHeight || siteRule?.height;
+      } else if (resolution?.forceMode) {
+        finalMode = resolution.forceMode;
       }
     }
 

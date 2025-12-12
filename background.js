@@ -101,30 +101,6 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Handle PiP toggle request from popup
-  if (message?.type === 'POPUP_PIP_TOGGLE') {
-    (async () => {
-      try {
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!activeTab?.id) {
-          sendResponse({ success: false, error: 'No active tab' });
-          return;
-        }
-        
-        if (!isSupportedUrl(activeTab.url)) {
-          sendResponse({ success: false, error: 'URL not supported for PiP' });
-          return;
-        }
-        
-        await requestToggle(activeTab.id, 'popup');
-        sendResponse({ success: true });
-      } catch (error) {
-        sendResponse({ success: false, error: error.message });
-      }
-    })();
-    return true; // Keep message channel open for async response
-  }
-
   // Handle messages from pip-page
   if (!message || message.source !== 'pip-page') return;
 

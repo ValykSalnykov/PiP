@@ -20,7 +20,7 @@ const waitForElement = (selector, timeout = 5000) => {
 // Disco mode color constants
 const DISCO_COLORS = {
     gradient: "linear-gradient(45deg, #ff0080, #ff8c00, #40e0d0, #ff0080)",
-    textColor: "#fff",
+    textColor: "#000",
     borderColor: "#fff",
     boxShadow: "0 0 20px rgba(255, 0, 128, 0.6), 0 0 30px rgba(64, 224, 208, 0.4)",
     textShadow: "0 0 10px rgba(255, 255, 255, 0.8)"
@@ -205,18 +205,16 @@ const getUserInputFromStorage = async () => {
                         } else {
                             const errorText = `Помилка при надсиланні: ${response.status} ${response.statusText}`;
                             console.error(errorText);
-                            // Store error and notify to show in popup
+                            // Store error for display in popup
                             chrome.storage.local.set({ 
-                                showError: true,
                                 lastBackofficeError: errorText 
                             });
                         }
                     } catch (error) {
                         const errorText = `Помилка мережі: ${error.message}`;
                         console.error(errorText);
-                        // Store error and notify to show in popup
+                        // Store error for display in popup
                         chrome.storage.local.set({ 
-                            showError: true,
                             lastBackofficeError: errorText 
                         });
                     }

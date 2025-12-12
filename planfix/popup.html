@@ -69,15 +69,16 @@
     }
 
     .disco-ball.active {
-      animation: disco-spin 2s linear infinite;
+      animation: disco-glow 1.5s ease-in-out infinite;
+      filter: drop-shadow(0 0 8px rgba(255, 0, 128, 0.8)) drop-shadow(0 0 12px rgba(64, 224, 208, 0.6));
     }
 
-    @keyframes disco-spin {
-      from {
-        transform: rotate(0deg);
+    @keyframes disco-glow {
+      0%, 100% {
+        filter: drop-shadow(0 0 8px rgba(255, 0, 128, 0.8)) drop-shadow(0 0 12px rgba(64, 224, 208, 0.6));
       }
-      to {
-        transform: rotate(360deg);
+      50% {
+        filter: drop-shadow(0 0 15px rgba(255, 140, 0, 1)) drop-shadow(0 0 20px rgba(64, 224, 208, 0.9));
       }
     }
 

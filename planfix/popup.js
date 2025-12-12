@@ -29,10 +29,9 @@ const updateClientIdUI = (value) => {
 };
 
 // Завантаження Client ID
-chrome.storage.local.get(['userInput', 'discoMode', 'showError'], (result) => {
+chrome.storage.local.get(['userInput', 'discoMode'], (result) => {
   const stored = result.userInput || "";
   const discoMode = result.discoMode || false;
-  const showError = result.showError || false;
   
   if (stored) {
     inputField.value = stored;
@@ -45,13 +44,6 @@ chrome.storage.local.get(['userInput', 'discoMode', 'showError'], (result) => {
   // Update disco ball state
   if (discoMode) {
     discoBall?.classList.add('active');
-  }
-  
-  // Auto-expand error section if showError flag is set
-  if (showError) {
-    showErrorButton.click();
-    // Clear the flag
-    chrome.storage.local.remove('showError');
   }
 });
 

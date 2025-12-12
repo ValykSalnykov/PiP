@@ -38,10 +38,48 @@
       gap: 8px;
     }
 
+    .popup__title-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .popup__title {
       margin: 0;
       font-size: 1rem;
       font-weight: 700;
+    }
+
+    .disco-ball {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      position: relative;
+      transition: transform 0.3s ease;
+    }
+
+    .disco-ball:hover {
+      transform: scale(1.1);
+    }
+
+    .disco-ball::before {
+      content: "🪩";
+      font-size: 20px;
+      display: block;
+    }
+
+    .disco-ball.active {
+      animation: disco-glow 1.5s ease-in-out infinite;
+      filter: drop-shadow(0 0 8px rgba(255, 0, 128, 0.8)) drop-shadow(0 0 12px rgba(64, 224, 208, 0.6));
+    }
+
+    @keyframes disco-glow {
+      0%, 100% {
+        filter: drop-shadow(0 0 8px rgba(255, 0, 128, 0.8)) drop-shadow(0 0 12px rgba(64, 224, 208, 0.6));
+      }
+      50% {
+        filter: drop-shadow(0 0 15px rgba(255, 140, 0, 1)) drop-shadow(0 0 20px rgba(64, 224, 208, 0.9));
+      }
     }
 
     .popup__status {
@@ -215,7 +253,10 @@
 <body>
   <div class="popup">
     <header class="popup__header">
-      <h1 class="popup__title">DAO Tools+</h1>
+      <div class="popup__title-wrapper">
+        <div class="disco-ball" id="discoBall" title="Toggle Disco Mode"></div>
+        <h1 class="popup__title">DAO Tools+</h1>
+      </div>
       <div class="popup__status is-hidden" id="clientStatus">
         <span class="popup__client-id-label">User ID</span>
         <span class="popup__client-id-value" id="clientIdBadge"></span>

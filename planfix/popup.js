@@ -11,6 +11,7 @@ const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
 const editClientBtn = document.getElementById("editClientBtn");
 const clientSettingsCard = document.getElementById("clientSettingsCard");
+const discoBall = document.getElementById("discoBall");
 
 const updateClientIdUI = (value) => {
   const normalized = (value || "").trim();
@@ -28,14 +29,21 @@ const updateClientIdUI = (value) => {
 };
 
 // Завантаження Client ID
-chrome.storage.local.get(['userInput'], (result) => {
+chrome.storage.local.get(['userInput', 'discoMode'], (result) => {
   const stored = result.userInput || "";
+  const discoMode = result.discoMode || false;
+  
   if (stored) {
     inputField.value = stored;
     updateClientIdUI(stored);
     fetchMode(stored);
   } else {
     updateClientIdUI("");
+  }
+  
+  // Update disco ball state
+  if (discoMode) {
+    discoBall?.classList.add('active');
   }
 });
 
@@ -194,5 +202,36 @@ showErrorButton.addEventListener("click", async () => {
       console.error("Error fetching last error:", error);
       errorMessage.textContent = "Помилка при запиті.";
     }
+  });
+});
+
+// Disco ball toggle
+discoBall?.addEventListener("click", () => {
+  chrome.storage.local.get(['discoMode'], (result) => {
+    const currentMode = result.discoMode || false;
+    const newMode = !currentMode;
+    
+    chrome.storage.local.set({ discoMode: newMode }, () => {
+      if (newMode) {
+        discoBall.classList.add('active');
+      } else {
+        discoBall.classList.remove('active');
+      }
+      
+      // Notify content script about disco mode change
+      chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+        if (tabs[0]) {
+          try {
+            chrome.tabs.sendMessage(tabs[0].id, {
+              action: 'toggleDiscoMode',
+              discoMode: newMode
+            });
+          } catch (error) {
+            // Ignore errors if content script is not loaded
+            console.debug('Could not send disco mode message:', error);
+          }
+        }
+      });
+    });
   });
 });

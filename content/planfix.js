@@ -17,6 +17,90 @@ const waitForElement = (selector, timeout = 5000) => {
     });
 };
 
+// Disco mode color constants
+const DISCO_COLORS = {
+    gradient: "linear-gradient(45deg, #ff0080, #ff8c00, #40e0d0, #ff0080)",
+    textColor: "#000",
+    borderColor: "#fff",
+    boxShadow: "0 0 20px rgba(255, 0, 128, 0.6), 0 0 30px rgba(64, 224, 208, 0.4)",
+    textShadow: "0 0 10px rgba(255, 255, 255, 0.8)"
+};
+
+// Function to apply disco style to button
+const applyDiscoStyle = (button) => {
+    // Store original styles for restoration
+    if (!button.dataset.originalStyles) {
+        button.dataset.originalStyles = JSON.stringify({
+            background: button.style.background,
+            backgroundSize: button.style.backgroundSize,
+            animation: button.style.animation,
+            color: button.style.color,
+            fontWeight: button.style.fontWeight,
+            border: button.style.border,
+            boxShadow: button.style.boxShadow,
+            textShadow: button.style.textShadow
+        });
+    }
+    
+    button.style.background = DISCO_COLORS.gradient;
+    button.style.backgroundSize = "300% 300%";
+    button.style.animation = "disco-gradient 3s ease infinite, disco-pulse 1s ease-in-out infinite";
+    button.style.color = DISCO_COLORS.textColor;
+    button.style.fontWeight = "bold";
+    button.style.border = `2px solid ${DISCO_COLORS.borderColor}`;
+    button.style.boxShadow = DISCO_COLORS.boxShadow;
+    button.style.textShadow = DISCO_COLORS.textShadow;
+    
+    // Add keyframes if not already added
+    if (!document.getElementById('disco-styles')) {
+        const style = document.createElement('style');
+        style.id = 'disco-styles';
+        style.textContent = `
+            @keyframes disco-gradient {
+                0% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+                100% { background-position: 0% 50%; }
+            }
+            @keyframes disco-pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+};
+
+// Function to remove disco style from button
+const removeDiscoStyle = (button) => {
+    // Restore original styles if they were saved
+    if (button.dataset.originalStyles) {
+        const originalStyles = JSON.parse(button.dataset.originalStyles);
+        button.style.background = originalStyles.background;
+        button.style.backgroundSize = originalStyles.backgroundSize;
+        button.style.animation = originalStyles.animation;
+        button.style.color = originalStyles.color;
+        button.style.fontWeight = originalStyles.fontWeight;
+        button.style.border = originalStyles.border;
+        button.style.boxShadow = originalStyles.boxShadow;
+        button.style.textShadow = originalStyles.textShadow;
+        delete button.dataset.originalStyles;
+    }
+};
+
+// Listen for disco mode toggle messages
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'toggleDiscoMode') {
+        const button = document.getElementById('send-data-button');
+        if (button) {
+            if (message.discoMode) {
+                applyDiscoStyle(button);
+            } else {
+                removeDiscoStyle(button);
+            }
+        }
+    }
+});
+
 // Функція для отримання параметра `key` з URL
 const getKeyFromUrl = () => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -69,6 +153,14 @@ const getUserInputFromStorage = async () => {
                 button.textContent = "Увійти в бекофіс";
                 button.style.marginLeft = "10px"; // Відступ між текстом і кнопкою
                 button.style.cursor = "pointer";
+                button.style.transition = "all 0.3s ease";
+
+                // Apply disco mode if enabled
+                chrome.storage.local.get(['discoMode'], (result) => {
+                    if (result.discoMode) {
+                        applyDiscoStyle(button);
+                    }
+                });
 
                 // Додаємо кнопку до обгортки
                 wrapper.appendChild(button);

@@ -46,7 +46,8 @@
         "inpage/pip-placeholder.css"
       ],
       "matches": [
-        "<all_urls>"
+        "http://*/*",
+        "https://*/*"
       ]
     }
   ]

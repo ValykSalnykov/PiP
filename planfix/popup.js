@@ -236,12 +236,15 @@ discoBall?.addEventListener("click", () => {
       // Notify content script about disco mode change
       chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
         if (tabs[0]) {
-          chrome.tabs.sendMessage(tabs[0].id, {
-            action: 'toggleDiscoMode',
-            discoMode: newMode
-          }).catch(() => {
+          try {
+            chrome.tabs.sendMessage(tabs[0].id, {
+              action: 'toggleDiscoMode',
+              discoMode: newMode
+            });
+          } catch (error) {
             // Ignore errors if content script is not loaded
-          });
+            console.debug('Could not send disco mode message:', error);
+          }
         }
       });
     });

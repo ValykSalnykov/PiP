@@ -178,15 +178,8 @@ toggleModeButton.addEventListener("click", async () => {
 
 // Показати останню помилку
 showErrorButton.addEventListener("click", async () => {
-  chrome.storage.local.get(['userInput', 'lastBackofficeError'], async (result) => {
+  chrome.storage.local.get(['userInput'], async (result) => {
     const clientId = result.userInput;
-    
-    // First check if there's a local backoffice error
-    if (result.lastBackofficeError) {
-      errorMessage.textContent = `Local error:\n${result.lastBackofficeError}`;
-      return;
-    }
-    
     if (!clientId) {
       errorMessage.textContent = "Будь ласка, збережіть Client ID спочатку.";
       return;

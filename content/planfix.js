@@ -203,20 +203,10 @@ const getUserInputFromStorage = async () => {
                             console.log(await response.json(), response.status);
                             console.log("Дані успішно надіслано.");
                         } else {
-                            const errorText = `Помилка при надсиланні: ${response.status} ${response.statusText}`;
-                            console.error(errorText);
-                            // Store error for display in popup
-                            chrome.storage.local.set({ 
-                                lastBackofficeError: errorText 
-                            });
+                            console.error("Помилка при надсиланні:", response.status, response.statusText);
                         }
                     } catch (error) {
-                        const errorText = `Помилка мережі: ${error.message}`;
-                        console.error(errorText);
-                        // Store error for display in popup
-                        chrome.storage.local.set({ 
-                            lastBackofficeError: errorText 
-                        });
+                        console.error("Помилка мережі:", error);
                     }
                 });
             }

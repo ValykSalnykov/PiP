@@ -8,15 +8,15 @@
     "default_title": "DAO Tools+",
     "default_icon": {
       "16": "icons/icon16.png",
-      "48": "icons/icon16.png",
-      "128": "icons/icon16.png"
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     },
     "default_popup": "planfix/popup.html"
   },
   "icons": {
     "16": "icons/icon16.png",
-    "48": "icons/icon16.png",
-    "128": "icons/icon16.png"
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
   "permissions": [
     "activeTab",

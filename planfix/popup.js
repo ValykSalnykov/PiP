@@ -11,6 +11,7 @@ const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
 const editClientBtn = document.getElementById("editClientBtn");
 const clientSettingsCard = document.getElementById("clientSettingsCard");
+const discoBall = document.getElementById("discoBall");
 
 const updateClientIdUI = (value) => {
   const normalized = (value || "").trim();
@@ -28,14 +29,29 @@ const updateClientIdUI = (value) => {
 };
 
 // Завантаження Client ID
-chrome.storage.local.get(['userInput'], (result) => {
+chrome.storage.local.get(['userInput', 'discoMode', 'showError'], (result) => {
   const stored = result.userInput || "";
+  const discoMode = result.discoMode || false;
+  const showError = result.showError || false;
+  
   if (stored) {
     inputField.value = stored;
     updateClientIdUI(stored);
     fetchMode(stored);
   } else {
     updateClientIdUI("");
+  }
+  
+  // Update disco ball state
+  if (discoMode) {
+    discoBall?.classList.add('active');
+  }
+  
+  // Auto-expand error section if showError flag is set
+  if (showError) {
+    showErrorButton.click();
+    // Clear the flag
+    chrome.storage.local.remove('showError');
   }
 });
 
@@ -170,8 +186,15 @@ toggleModeButton.addEventListener("click", async () => {
 
 // Показати останню помилку
 showErrorButton.addEventListener("click", async () => {
-  chrome.storage.local.get(['userInput'], async (result) => {
+  chrome.storage.local.get(['userInput', 'lastBackofficeError'], async (result) => {
     const clientId = result.userInput;
+    
+    // First check if there's a local backoffice error
+    if (result.lastBackofficeError) {
+      errorMessage.textContent = `Local error:\n${result.lastBackofficeError}`;
+      return;
+    }
+    
     if (!clientId) {
       errorMessage.textContent = "Будь ласка, збережіть Client ID спочатку.";
       return;
@@ -194,5 +217,33 @@ showErrorButton.addEventListener("click", async () => {
       console.error("Error fetching last error:", error);
       errorMessage.textContent = "Помилка при запиті.";
     }
+  });
+});
+
+// Disco ball toggle
+discoBall?.addEventListener("click", () => {
+  chrome.storage.local.get(['discoMode'], (result) => {
+    const currentMode = result.discoMode || false;
+    const newMode = !currentMode;
+    
+    chrome.storage.local.set({ discoMode: newMode }, () => {
+      if (newMode) {
+        discoBall.classList.add('active');
+      } else {
+        discoBall.classList.remove('active');
+      }
+      
+      // Notify content script about disco mode change
+      chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            action: 'toggleDiscoMode',
+            discoMode: newMode
+          }).catch(() => {
+            // Ignore errors if content script is not loaded
+          });
+        }
+      });
+    });
   });
 });

@@ -17,6 +17,62 @@ const waitForElement = (selector, timeout = 5000) => {
     });
 };
 
+// Function to apply disco style to button
+const applyDiscoStyle = (button) => {
+    button.style.background = "linear-gradient(45deg, #ff0080, #ff8c00, #40e0d0, #ff0080)";
+    button.style.backgroundSize = "300% 300%";
+    button.style.animation = "disco-gradient 3s ease infinite, disco-pulse 1s ease-in-out infinite";
+    button.style.color = "#fff";
+    button.style.fontWeight = "bold";
+    button.style.border = "2px solid #fff";
+    button.style.boxShadow = "0 0 20px rgba(255, 0, 128, 0.6), 0 0 30px rgba(64, 224, 208, 0.4)";
+    button.style.textShadow = "0 0 10px rgba(255, 255, 255, 0.8)";
+    
+    // Add keyframes if not already added
+    if (!document.getElementById('disco-styles')) {
+        const style = document.createElement('style');
+        style.id = 'disco-styles';
+        style.textContent = `
+            @keyframes disco-gradient {
+                0% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+                100% { background-position: 0% 50%; }
+            }
+            @keyframes disco-pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+};
+
+// Function to remove disco style from button
+const removeDiscoStyle = (button) => {
+    button.style.background = "";
+    button.style.backgroundSize = "";
+    button.style.animation = "";
+    button.style.color = "";
+    button.style.fontWeight = "";
+    button.style.border = "";
+    button.style.boxShadow = "";
+    button.style.textShadow = "";
+};
+
+// Listen for disco mode toggle messages
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'toggleDiscoMode') {
+        const button = document.getElementById('send-data-button');
+        if (button) {
+            if (message.discoMode) {
+                applyDiscoStyle(button);
+            } else {
+                removeDiscoStyle(button);
+            }
+        }
+    }
+});
+
 // Функція для отримання параметра `key` з URL
 const getKeyFromUrl = () => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -69,6 +125,14 @@ const getUserInputFromStorage = async () => {
                 button.textContent = "Увійти в бекофіс";
                 button.style.marginLeft = "10px"; // Відступ між текстом і кнопкою
                 button.style.cursor = "pointer";
+                button.style.transition = "all 0.3s ease";
+
+                // Apply disco mode if enabled
+                chrome.storage.local.get(['discoMode'], (result) => {
+                    if (result.discoMode) {
+                        applyDiscoStyle(button);
+                    }
+                });
 
                 // Додаємо кнопку до обгортки
                 wrapper.appendChild(button);
@@ -111,10 +175,22 @@ const getUserInputFromStorage = async () => {
                             console.log(await response.json(), response.status);
                             console.log("Дані успішно надіслано.");
                         } else {
-                            console.error("Помилка при надсиланні:", response.status, response.statusText);
+                            const errorText = `Помилка при надсиланні: ${response.status} ${response.statusText}`;
+                            console.error(errorText);
+                            // Store error and notify to show in popup
+                            chrome.storage.local.set({ 
+                                showError: true,
+                                lastBackofficeError: errorText 
+                            });
                         }
                     } catch (error) {
-                        console.error("Помилка мережі:", error);
+                        const errorText = `Помилка мережі: ${error.message}`;
+                        console.error(errorText);
+                        // Store error and notify to show in popup
+                        chrome.storage.local.set({ 
+                            showError: true,
+                            lastBackofficeError: errorText 
+                        });
                     }
                 });
             }

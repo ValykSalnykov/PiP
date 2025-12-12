@@ -72,46 +72,6 @@ async function requestToggle(tabId, trigger = 'action') {
   }
 }
 
-async function requestSelection(tabId, trigger = 'action-select') {
-  log.debug('Sending PiP element-selection request', { tabId, trigger });
-  try {
-    await chrome.tabs.sendMessage(
-      tabId,
-      {
-        command: 'PIP_SELECT_REQUEST',
-        trigger
-      },
-      { frameId: 0 }
-    );
-  } catch (error) {
-    const runtimeMessage = chrome.runtime.lastError?.message ?? error?.message;
-    log.warn('PiP selection request failed', { tabId, trigger, error: runtimeMessage });
-    chrome.action.setBadgeText({ tabId, text: 'ERR' });
-    setTimeout(() => chrome.action.setBadgeText({ tabId, text: '' }), 2500);
-  }
-}
-
-chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab || tab.id === undefined) {
-    log.debug('Toolbar icon click ignored — tab missing');
-    return;
-  }
-
-  log.info('Toolbar icon clicked', { tabId: tab.id, url: tab.url, trigger: 'action' });
-
-  if (!isSupportedUrl(tab.url)) {
-    chrome.action.setBadgeText({ tabId: tab.id, text: 'N/A' });
-    setTimeout(() => chrome.action.setBadgeText({ tabId: tab.id, text: '' }), 2000);
-    return;
-  }
-
-  if (TAB_STATE.get(tab.id) === true) {
-    await requestToggle(tab.id, 'action-close');
-  } else {
-    await requestSelection(tab.id, 'action-select');
-  }
-});
-
 chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command !== 'toggle-pip') return;
 
@@ -140,7 +100,8 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle messages from pip-page
   if (!message || message.source !== 'pip-page') return;
 
   const tabId = sender.tab?.id;
@@ -155,17 +116,8 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       log.info('Updated PiP state', {
         tabId,
         state: message.state,
-        trigger: message.trigger,
-        mode: message.mode
+        trigger: message.trigger
       });
-      break;
-    case 'PIP_SELECTION':
-      if (message.state === 'active') {
-        chrome.action.setBadgeText({ tabId, text: 'SEL' });
-      } else {
-        updateBadge(tabId);
-      }
-      log.debug('Selection state', { tabId, selection: message.state, reason: message.reason });
       break;
     case 'PIP_UNSUPPORTED':
       TAB_STATE.delete(tabId);

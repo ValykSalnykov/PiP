@@ -28,11 +28,30 @@ const log = createLogger('background', 'info');
 
 const TAB_STATE = new Map();
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
+const PLANFIX_URL_PATTERN = /^https:\/\/dao\.planfix\.ua\//;
+const PLANFIX_POPUP_PATH = 'planfix/popup.html';
 
 chrome.runtime.onInstalled.addListener(() => {
   log.info('Extension installed or updated');
   chrome.action.setBadgeBackgroundColor({ color: '#2563EB' });
   chrome.action.setBadgeText({ text: '' });
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab?.id !== undefined) {
+        syncActionPopup(tab.id, tab.url);
+      }
+    }
+  });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab?.id !== undefined) {
+        syncActionPopup(tab.id, tab.url);
+      }
+    }
+  });
 });
 
 function isSupportedUrl(url) {
@@ -50,6 +69,28 @@ function isSupportedUrl(url) {
   } catch (error) {
     log.warn('Unable to parse tab URL — treating as unsupported', { url, error });
     return false;
+  }
+}
+
+function isPlanfixUrl(url) {
+  return typeof url === 'string' && PLANFIX_URL_PATTERN.test(url);
+}
+
+async function syncActionPopup(tabId, urlHint) {
+  if (tabId === undefined) return;
+
+  try {
+    let url = typeof urlHint === 'string' ? urlHint : undefined;
+    if (!url) {
+      const tab = await chrome.tabs.get(tabId);
+      url = tab?.url ?? '';
+    }
+    const popupPath = isPlanfixUrl(url) ? PLANFIX_POPUP_PATH : '';
+    await chrome.action.setPopup({ tabId, popup: popupPath });
+    log.debug('Action popup synced', { tabId, url, popup: popupPath || null });
+  } catch (error) {
+    const message = chrome.runtime.lastError?.message ?? error?.message ?? String(error);
+    log.warn('Failed to sync action popup', { tabId, error: message });
   }
 }
 
@@ -72,25 +113,6 @@ async function requestToggle(tabId, trigger = 'action') {
   }
 }
 
-async function requestSelection(tabId, trigger = 'action-select') {
-  log.debug('Sending PiP element-selection request', { tabId, trigger });
-  try {
-    await chrome.tabs.sendMessage(
-      tabId,
-      {
-        command: 'PIP_SELECT_REQUEST',
-        trigger
-      },
-      { frameId: 0 }
-    );
-  } catch (error) {
-    const runtimeMessage = chrome.runtime.lastError?.message ?? error?.message;
-    log.warn('PiP selection request failed', { tabId, trigger, error: runtimeMessage });
-    chrome.action.setBadgeText({ tabId, text: 'ERR' });
-    setTimeout(() => chrome.action.setBadgeText({ tabId, text: '' }), 2500);
-  }
-}
-
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || tab.id === undefined) {
     log.debug('Toolbar icon click ignored — tab missing');
@@ -99,17 +121,18 @@ chrome.action.onClicked.addListener(async (tab) => {
 
   log.info('Toolbar icon clicked', { tabId: tab.id, url: tab.url, trigger: 'action' });
 
+  if (isPlanfixUrl(tab.url)) {
+    log.debug('Toolbar click ignored on Planfix tab — popup handles interaction');
+    return;
+  }
+
   if (!isSupportedUrl(tab.url)) {
     chrome.action.setBadgeText({ tabId: tab.id, text: 'N/A' });
     setTimeout(() => chrome.action.setBadgeText({ tabId: tab.id, text: '' }), 2000);
     return;
   }
 
-  if (TAB_STATE.get(tab.id) === true) {
-    await requestToggle(tab.id, 'action-close');
-  } else {
-    await requestSelection(tab.id, 'action-select');
-  }
+  await requestToggle(tab.id, 'action');
 });
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
@@ -155,17 +178,8 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       log.info('Updated PiP state', {
         tabId,
         state: message.state,
-        trigger: message.trigger,
-        mode: message.mode
+        trigger: message.trigger
       });
-      break;
-    case 'PIP_SELECTION':
-      if (message.state === 'active') {
-        chrome.action.setBadgeText({ tabId, text: 'SEL' });
-      } else {
-        updateBadge(tabId);
-      }
-      log.debug('Selection state', { tabId, selection: message.state, reason: message.reason });
       break;
     case 'PIP_UNSUPPORTED':
       TAB_STATE.delete(tabId);
@@ -187,6 +201,14 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url !== undefined) {
+    syncActionPopup(tabId, changeInfo.url);
+  } else if (changeInfo.status === 'complete') {
+    syncActionPopup(tabId, tab?.url);
+  }
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (TAB_STATE.delete(tabId)) {
     log.debug('Cleared PiP state for closed tab', { tabId });
@@ -196,6 +218,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   log.debug('Tab activated, refreshing badge', { tabId });
   updateBadge(tabId);
+  syncActionPopup(tabId);
 });
 
 async function getActiveTabId() {

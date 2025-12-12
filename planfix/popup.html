@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Planfix → Syrve</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      max-width: 320px;
+      padding: 12px;
+      font-family: "Inter", "Segoe UI", Arial, sans-serif;
+      background: #f6f7fb;
+      color: #111827;
+      overflow: hidden;
+    }
+
+    .popup {
+      background: #ffffff;
+      border-radius: 14px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      box-shadow: 0 16px 28px rgba(79, 70, 229, 0.08);
+      border: 1px solid rgba(79, 70, 229, 0.1);
+    }
+
+    .popup__header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .popup__title {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .popup__status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: #4338ca;
+    }
+
+    .popup__status.is-hidden {
+      display: none;
+    }
+
+    .popup__client-id-label {
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #6b7280;
+    }
+
+    .popup__client-id-value {
+      font-weight: 700;
+      color: #4f46e5;
+      background: rgba(79, 70, 229, 0.12);
+      padding: 4px 8px;
+      border-radius: 999px;
+    }
+
+    .popup__link-button {
+      background: none;
+      border: none;
+      color: #4338ca;
+      font-weight: 600;
+      font-size: 0.75rem;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+    }
+
+    .popup__link-button:hover {
+      color: #312e81;
+    }
+
+    .card {
+      display: grid;
+      gap: 8px;
+      border-radius: 12px;
+      border: 1px solid rgba(79, 70, 229, 0.12);
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .card--collapsed {
+      display: none;
+    }
+
+    .card__title {
+      margin: 0;
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: #4f46e5;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .field {
+      display: grid;
+      gap: 4px;
+    }
+
+    .field label {
+      font-size: 0.74rem;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .field input {
+      width: 100%;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(17, 24, 39, 0.18);
+      font-size: 0.88rem;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      background: #ffffff;
+    }
+
+    .field input:focus {
+      border-color: #4f46e5;
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+    }
+
+    .field__note {
+      margin: 0;
+      font-size: 0.7rem;
+      color: #9ca3af;
+    }
+
+    .fields-inline {
+      display: grid;
+      gap: 8px;
+    }
+
+    .button {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+      background: #4f46e5;
+      color: #ffffff;
+      box-shadow: 0 8px 16px rgba(79, 70, 229, 0.18);
+    }
+
+    .button:hover {
+      background: #4338ca;
+      transform: translateY(-1px);
+      box-shadow: 0 10px 20px rgba(67, 56, 202, 0.2);
+    }
+
+    .button:active {
+      transform: translateY(0);
+      box-shadow: 0 6px 12px rgba(67, 56, 202, 0.16);
+    }
+
+    .button--secondary {
+      background: rgba(79, 70, 229, 0.12);
+      color: #4338ca;
+      box-shadow: none;
+      border: 1px solid rgba(79, 70, 229, 0.2);
+    }
+
+    .button--secondary:hover {
+      background: rgba(79, 70, 229, 0.2);
+    }
+
+    .card__actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    #modeInfo {
+      margin: 0;
+      font-size: 0.84rem;
+      color: #111827;
+      font-weight: 500;
+    }
+
+    #errorMessage {
+      margin: 0;
+      font-size: 0.78rem;
+      color: #dc2626;
+      white-space: pre-wrap;
+      background: rgba(220, 38, 38, 0.08);
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid rgba(220, 38, 38, 0.18);
+    }
+
+    #errorMessage:empty {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="popup">
+    <header class="popup__header">
+      <h1 class="popup__title">Planfix → Syrve</h1>
+      <div class="popup__status is-hidden" id="clientStatus">
+        <span class="popup__client-id-label">User ID</span>
+        <span class="popup__client-id-value" id="clientIdBadge"></span>
+        <button class="popup__link-button" id="editClientBtn" type="button">Изменить</button>
+      </div>
+    </header>
+
+    <section class="card" aria-labelledby="client-settings" id="clientSettingsCard">
+      <h2 id="client-settings" class="card__title">Идентификатор пользователя</h2>
+      <div class="field">
+        <input type="text" id="inputField" placeholder="Введите Client ID">
+      </div>
+      <button id="saveButton" class="button">Сохранить Client ID</button>
+    </section>
+
+    <section class="card" aria-labelledby="one-time">
+      <h2 id="one-time" class="card__title">Ручное открытие сервера</h2>
+      <div class="fields-inline">
+        <div class="field">
+          <label for="serverField">Сервер</label>
+          <input type="text" id="serverField" placeholder="Адрес сервера">
+        </div>
+        <div class="field">
+          <label for="portField">Порт</label>
+          <input type="text" id="portField" placeholder="Номер порта">
+        </div>
+      </div>
+      <button id="sendDataButton" class="button">Открыть Backoffice / Chain</button>
+    </section>
+
+    <section class="card" aria-labelledby="mode-management">
+      <h2 id="mode-management" class="card__title">Режим</h2>
+      <p id="modeInfo">Загрузка данных...</p>
+      <button id="toggleModeButton" class="button button--secondary">Переключить режим</button>
+    </section>
+
+    <section class="card" aria-labelledby="error-info">
+      <h2 id="error-info" class="card__title">Ошибки</h2>
+      <div class="card__actions">
+        <button id="showErrorButton" class="button button--secondary">Показать последнюю ошибку</button>
+        <div id="errorMessage"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

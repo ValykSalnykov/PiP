@@ -11,6 +11,21 @@ const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
 const editClientBtn = document.getElementById("editClientBtn");
 const clientSettingsCard = document.getElementById("clientSettingsCard");
+const pipButton = document.getElementById("pipButton");
+
+// PiP button handler
+pipButton?.addEventListener("click", async () => {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'POPUP_PIP_TOGGLE' });
+    if (response?.success) {
+      window.close();
+    } else {
+      alert(response?.error || 'Не удалось открыть PiP');
+    }
+  } catch (error) {
+    alert('Ошибка: ' + error.message);
+  }
+});
 
 const updateClientIdUI = (value) => {
   const normalized = (value || "").trim();

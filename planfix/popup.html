@@ -215,13 +215,18 @@
 <body>
   <div class="popup">
     <header class="popup__header">
-      <h1 class="popup__title">Planfix → Syrve</h1>
+      <h1 class="popup__title">DAO Tools+</h1>
       <div class="popup__status is-hidden" id="clientStatus">
         <span class="popup__client-id-label">User ID</span>
         <span class="popup__client-id-value" id="clientIdBadge"></span>
         <button class="popup__link-button" id="editClientBtn" type="button">Изменить</button>
       </div>
     </header>
+
+    <section class="card" aria-labelledby="pip-control">
+      <h2 id="pip-control" class="card__title">Picture-in-Picture</h2>
+      <button id="pipButton" class="button">Открыть в PiP</button>
+    </section>
 
     <section class="card" aria-labelledby="client-settings" id="clientSettingsCard">
       <h2 id="client-settings" class="card__title">Идентификатор пользователя</h2>

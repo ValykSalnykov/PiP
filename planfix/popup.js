@@ -14,18 +14,20 @@ const clientSettingsCard = document.getElementById("clientSettingsCard");
 const pipButton = document.getElementById("pipButton");
 
 // PiP button handler
-pipButton?.addEventListener("click", async () => {
-  try {
-    const response = await chrome.runtime.sendMessage({ type: 'POPUP_PIP_TOGGLE' });
-    if (response?.success) {
-      window.close();
-    } else {
-      alert(response?.error || 'Не удалось открыть PiP');
+if (pipButton) {
+  pipButton.addEventListener("click", async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'POPUP_PIP_TOGGLE' });
+      if (response?.success) {
+        window.close();
+      } else {
+        errorMessage.textContent = response?.error || 'Не удалось открыть PiP';
+      }
+    } catch (error) {
+      errorMessage.textContent = 'Ошибка: ' + error.message;
     }
-  } catch (error) {
-    alert('Ошибка: ' + error.message);
-  }
-});
+  });
+}
 
 const updateClientIdUI = (value) => {
   const normalized = (value || "").trim();

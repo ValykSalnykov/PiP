@@ -74,6 +74,11 @@
     return 'documentPictureInPicture' in window;
   }
 
+  function isOperaFamily() {
+    const ua = navigator?.userAgent || '';
+    return ua.includes('OPR/') || ua.includes('Opera');
+  }
+
   window.addEventListener('message', handleIncomingMessage, false);
 
   window.__interactiveTabPiP = {
@@ -646,7 +651,10 @@
     disconnectElementResizeObserver();
 
     state.openPromise = (async () => {
-      const options = { preferInitialWindowPlacement: true };
+      const options = { alwaysOnTop: true };
+      if (!isOperaFamily()) {
+        options.preferInitialWindowPlacement = true;
+      }
       
       // Приоритет: customSize > initialElementSize > lastKnownSize > fallbackSize
       if (customSize && customSize.width && customSize.height) {
@@ -678,6 +686,7 @@
           height: pipWindow.innerHeight,
           mode
         });
+        enforceAlwaysOnTop(pipWindow);
         lastKnownSize = {
           width: pipWindow.innerWidth,
           height: pipWindow.innerHeight
@@ -1427,6 +1436,26 @@ body.pipx-body {
     } catch (error) {
       logger.warn('Unable to calculate element size for PiP window', error);
       return null;
+    }
+  }
+
+  function enforceAlwaysOnTop(pipWindow) {
+    if (!pipWindow) return;
+    try {
+      const controller = pipWindow.documentPictureInPicture || window.documentPictureInPicture;
+      if (controller && typeof controller.setWindowAlwaysOnTop === 'function') {
+        controller.setWindowAlwaysOnTop(true);
+        return;
+      }
+      if ('alwaysOnTop' in pipWindow) {
+        pipWindow.alwaysOnTop = true;
+        return;
+      }
+      if (isOperaFamily() && typeof pipWindow.focus === 'function') {
+        pipWindow.focus();
+      }
+    } catch (error) {
+      logger.debug('Unable to enforce always-on-top for PiP window', error);
     }
   }
 

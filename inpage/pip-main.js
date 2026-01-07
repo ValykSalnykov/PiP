@@ -74,9 +74,14 @@
     return 'documentPictureInPicture' in window;
   }
 
-  function isOperaFamily() {
-    const ua = navigator?.userAgent || '';
-    return ua.includes('OPR/') || ua.includes('Opera');
+  function hasWritableAlwaysOnTop(target) {
+    if (!target || !('alwaysOnTop' in target)) return false;
+    const proto = Object.getPrototypeOf(target);
+    const descriptor =
+      Object.getOwnPropertyDescriptor(target, 'alwaysOnTop') ||
+      (proto ? Object.getOwnPropertyDescriptor(proto, 'alwaysOnTop') : null);
+    if (!descriptor) return false;
+    return Boolean(descriptor.writable || descriptor.set);
   }
 
   window.addEventListener('message', handleIncomingMessage, false);
@@ -651,9 +656,15 @@
     disconnectElementResizeObserver();
 
     state.openPromise = (async () => {
-      const options = { alwaysOnTop: true };
-      if (!isOperaFamily()) {
-        options.preferInitialWindowPlacement = true;
+      const controller = window.documentPictureInPicture;
+      const canSetAlwaysOnTop = controller && typeof controller.setWindowAlwaysOnTop === 'function';
+      const canWriteAlwaysOnTop = controller && hasWritableAlwaysOnTop(controller);
+      const shouldRequestAlwaysOnTop =
+        canWriteAlwaysOnTop || (canSetAlwaysOnTop && window?.opr && typeof window.opr === 'object');
+
+      const options = { preferInitialWindowPlacement: true };
+      if (shouldRequestAlwaysOnTop) {
+        options.alwaysOnTop = true;
       }
       
       // Приоритет: customSize > initialElementSize > lastKnownSize > fallbackSize
@@ -686,7 +697,9 @@
           height: pipWindow.innerHeight,
           mode
         });
-        enforceAlwaysOnTop(pipWindow);
+        if (canSetAlwaysOnTop && !canWriteAlwaysOnTop && !enforceAlwaysOnTop(controller, true, false)) {
+          logger.debug('PiP window could not be marked always-on-top after creation');
+        }
         lastKnownSize = {
           width: pipWindow.innerWidth,
           height: pipWindow.innerHeight
@@ -1439,24 +1452,21 @@ body.pipx-body {
     }
   }
 
-  function enforceAlwaysOnTop(pipWindow) {
-    if (!pipWindow) return;
+  function enforceAlwaysOnTop(controller, useMethod, useWritable) {
     try {
-      const controller = pipWindow.documentPictureInPicture || window.documentPictureInPicture;
-      if (controller && typeof controller.setWindowAlwaysOnTop === 'function') {
+      if (controller && useMethod && typeof controller.setWindowAlwaysOnTop === 'function') {
         controller.setWindowAlwaysOnTop(true);
-        return;
+        return true;
       }
-      if ('alwaysOnTop' in pipWindow) {
-        pipWindow.alwaysOnTop = true;
-        return;
+      if (controller && useWritable) {
+        controller.alwaysOnTop = true;
+        return true;
       }
-      if (isOperaFamily() && typeof pipWindow.focus === 'function') {
-        pipWindow.focus();
-      }
+      logger.debug('No supported always-on-top hooks available in this browser');
     } catch (error) {
       logger.debug('Unable to enforce always-on-top for PiP window', error);
     }
+    return false;
   }
 
   function clampPipWindowSize(width, height) {

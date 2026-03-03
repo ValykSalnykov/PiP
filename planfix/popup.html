@@ -227,6 +227,51 @@
       gap: 8px;
     }
 
+    .card__divider {
+      border: none;
+      border-top: 1px solid rgba(79, 70, 229, 0.12);
+      margin: 2px 0;
+    }
+
+    .card__sub-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin: 0;
+    }
+
+    .button--grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .button--success {
+      background: #059669;
+      color: #ffffff;
+      box-shadow: 0 8px 16px rgba(5, 150, 105, 0.18);
+    }
+
+    .button--success:hover {
+      background: #047857;
+      transform: translateY(-1px);
+      box-shadow: 0 10px 20px rgba(4, 120, 87, 0.2);
+    }
+
+    .button--warning {
+      background: #d97706;
+      color: #ffffff;
+      box-shadow: 0 8px 16px rgba(217, 119, 6, 0.18);
+    }
+
+    .button--warning:hover {
+      background: #b45309;
+      transform: translateY(-1px);
+      box-shadow: 0 10px 20px rgba(180, 83, 9, 0.2);
+    }
+
     #modeInfo {
       margin: 0;
       font-size: 0.84rem;
@@ -285,6 +330,12 @@
         </div>
       </div>
       <button id="sendDataButton" class="button">Відкрити Backoffice / Chain</button>
+      <hr class="card__divider">
+      <p class="card__sub-label">Ліцензії Syrve</p>
+      <div class="button--grid-2">
+        <button id="checkLicenseButton" class="button button--success">✓ Перевірити</button>
+        <button id="updateLicenseButton" class="button button--warning">↻ Оновити</button>
+      </div>
     </section>
 
     <section class="card" aria-labelledby="mode-management">

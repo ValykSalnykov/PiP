@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "DAO Tools+",
   "description": "Центр инструментов DAO: запуск PiP, интеграция с PlanFix и Syrve, а также будущие утилиты для работы.",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "DAO Tools+",
@@ -20,13 +20,15 @@
   },
   "permissions": [
     "activeTab",
+    "tabs",
     "storage"
   ],
   "host_permissions": [
     "https://*.us-central1.hosted.app/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
-    "https://planfix-to-syrve.com:8000/*"
+    "https://planfix-to-syrve.com:8000/*",
+    "https://syrve-license-manager-1038989357415.us-west1.run.app/*"
   ],
   "background": {
     "service_worker": "background.js",

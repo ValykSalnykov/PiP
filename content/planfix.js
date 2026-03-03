@@ -87,10 +87,10 @@ const removeDiscoStyle = (button) => {
     }
 };
 
-// Функція для вилучення адреси .daocloud.fun з рядка, що може містити кілька адрес через /
+// Функція для вилучення адреси сервера (.daocloud.fun, .daocloud.it, .syrve.online) з рядка, що може містити кілька адрес через /
 const extractDaoCloudAddress = (rawAddress) => {
     const parts = rawAddress.split('/').map(s => s.trim()).filter(Boolean);
-    return parts.find(p => /\.daocloud\.fun/i.test(p)) || null;
+    return parts.find(p => /\.daocloud\.fun|\.daocloud\.it|\.syrve\.online/i.test(p)) || null;
 };
 
 // Listen for disco mode toggle messages
@@ -178,7 +178,7 @@ const getUserInputFromStorage = async () => {
                     const rawField72Value = field72ValueElement.textContent.trim();
                     const field72Value = extractDaoCloudAddress(rawField72Value);
                     if (!field72Value) {
-                        console.warn("Адреса .daocloud.fun не знайдена, дію скасовано.");
+                        console.warn("Адреса сервера не знайдена, дію скасовано.");
                         return;
                     }
 
@@ -274,7 +274,7 @@ const getUserInputFromStorage = async () => {
             const serverField = document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
             const rawServer = serverField ? serverField.textContent.trim() : '';
             const server = extractDaoCloudAddress(rawServer);
-            if (!server) { alert("Адреса .daocloud.fun не знайдена."); return; }
+            if (!server) { alert("Адресу сервера не знайдено. Перевірте поле адреси."); return; }
             const portField = document.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
             const port = portField ? portField.textContent.trim() : '';
             const portParam = port ? `&port=${encodeURIComponent(port)}` : '';

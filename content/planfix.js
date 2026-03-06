@@ -328,13 +328,51 @@ const getUserInputFromStorage = async () => {
 (() => {
     const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
 
-    const COL_CLIENT = 'td-item-qe-4';
-    const COL_SERVER = 'td-item-qe-6';
-    const COL_PORT   = 'td-item-qe-8';
-    const COL_CHAIN  = 'td-item-qe-10';
+    // Стабільні ідентифікатори колонок Planfix з data-columnid у header DOM.
+    const HEADER_CLIENT = 'Клієнт';
+    const HEADER_SERVER = 'Сервер';
+    const HEADER_PORT   = 'Порт';
+    const HEADER_CHAIN  = 'Chain';
 
-    // Читати текст ячейки через <a>, щоб не захоплювати сторонній текст
+    const COLUMN_IDS = {
+        [HEADER_CLIENT]: '80',
+        [HEADER_SERVER]: '72',
+        [HEADER_PORT]: '74',
+        [HEADER_CHAIN]: '260'
+    };
+
+    const DEFAULT_COL_CLASSES = {
+        [HEADER_CLIENT]: 'td-item-qe-4',
+        [HEADER_SERVER]: 'td-item-qe-6',
+        [HEADER_PORT]: 'td-item-qe-10',
+        [HEADER_CHAIN]: 'td-item-qe-8'
+    };
+
+    const findQeClassSuffix = (element) => {
+        if (!element) return null;
+        const matchedClass = [...element.classList].find((cls) => /(?:^|-)qe-\d+$/.test(cls));
+        if (!matchedClass) return null;
+        const match = matchedClass.match(/qe-(\d+)$/);
+        return match ? match[1] : null;
+    };
+
+    // Знаходить реальний CSS-клас td для колонки через data-columnid у header DOM.
+    const findColClass = (headerText) => {
+        const columnId = COLUMN_IDS[headerText];
+        if (!columnId) return DEFAULT_COL_CLASSES[headerText] || null;
+
+        const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${columnId}"]`)
+            || document.querySelector(`[data-columnid="${columnId}"]`);
+        const headerCell = headerTrigger?.closest('td, th, .td-head');
+        const qeSuffix = findQeClassSuffix(headerCell) || findQeClassSuffix(headerTrigger);
+        if (qeSuffix) return `td-item-qe-${qeSuffix}`;
+
+        return DEFAULT_COL_CLASSES[headerText] || null;
+    };
+
+    // Читати текст ячейки через CSS-клас td та <a>-посилання
     const cellText = (row, colClass) => {
+        if (!colClass) return '';
         const td = row.querySelector(`td.${colClass}`);
         if (!td) return '';
         const link = td.querySelector('a');
@@ -346,11 +384,13 @@ const getUserInputFromStorage = async () => {
         const rows = document.querySelectorAll('tr.handbook-data-item');
         const seen = new Set();
         const result = [];
+        const serverClass = findColClass(HEADER_SERVER);
+        const portClass   = findColClass(HEADER_PORT);
         rows.forEach(row => {
             if (cellText(row, colClass) !== groupValue) return;
-            const server = cellText(row, COL_SERVER);
+            const server = cellText(row, serverClass);
             if (!server) return;
-            const port = cellText(row, COL_PORT) || '443';
+            const port = cellText(row, portClass) || '443';
             const entry = `${server}:${port}`;
             if (!seen.has(entry)) { seen.add(entry); result.push(entry); }
         });
@@ -428,7 +468,10 @@ const getUserInputFromStorage = async () => {
         return row;
     };
 
+    const HOVER_HIDE_DELAY = 1000;
     let hideTimer = null;
+    let hideAnimationTimer = null;
+    let activeHoverCell = null;
 
     // Позиціонувати панель під ячейкою, вирівнюючи по лівому краю
     const positionBelow = (td) => {
@@ -451,8 +494,17 @@ const getUserInputFromStorage = async () => {
     };
 
     const showPanel = (td, colClass, label, value) => {
+        if (activeHoverCell && activeHoverCell !== td && panel.style.display !== 'none') {
+            return;
+        }
+
         clearTimeout(hideTimer);
+        hideTimer = null;
+        clearTimeout(hideAnimationTimer);
+        hideAnimationTimer = null;
         if (!value) return;
+
+        activeHoverCell = td;
 
         panel.innerHTML = '';
         const groupRow = makeGroupRow(label, value, colClass);
@@ -469,24 +521,37 @@ const getUserInputFromStorage = async () => {
 
     const hidePanel = (delay = 200) => {
         clearTimeout(hideTimer);
+        hideTimer = null;
         hideTimer = setTimeout(() => {
+            hideTimer = null;
             panel.style.opacity = '0';
-            setTimeout(() => { panel.style.display = 'none'; }, 150);
+            clearTimeout(hideAnimationTimer);
+            hideAnimationTimer = setTimeout(() => {
+                panel.style.display = 'none';
+                panel.innerHTML = '';
+                activeHoverCell = null;
+                hideAnimationTimer = null;
+            }, 150);
         }, delay);
     };
 
-    panel.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+    panel.addEventListener('mouseenter', () => {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+    });
     panel.addEventListener('mouseleave', () => hidePanel(150));
 
     // Підвішуємо події на конкретні ячейки (Chain / Клієнт)
     const COLS = [
-        { colClass: COL_CHAIN,  label: 'Chain'   },
-        { colClass: COL_CLIENT, label: 'Клієнт' },
+        { headerText: HEADER_CHAIN,  label: 'Chain'   },
+        { headerText: HEADER_CLIENT, label: 'Клієнт' },
     ];
 
     const attachCellHover = () => {
         document.querySelectorAll('tr.handbook-data-item').forEach(row => {
-            COLS.forEach(({ colClass, label }) => {
+            COLS.forEach(({ headerText, label }) => {
+                const colClass = findColClass(headerText);
+                if (!colClass) return;
                 const td = row.querySelector(`td.${colClass}`);
                 if (!td || td.dataset.hoverAttached) return;
                 td.dataset.hoverAttached = '1';
@@ -496,7 +561,7 @@ const getUserInputFromStorage = async () => {
                     const value = cellText(row, colClass);
                     showPanel(td, colClass, label, value);
                 });
-                td.addEventListener('mouseleave', () => hidePanel());
+                td.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
             });
         });
     };

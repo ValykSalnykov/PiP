@@ -93,17 +93,50 @@ const extractDaoCloudAddress = (rawAddress) => {
     return parts.find(p => /\.daocloud\.fun|\.daocloud\.it|\.syrve\.online/i.test(p)) || null;
 };
 
+const copyTextToClipboard = async (value) => {
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(value);
+            return;
+        } catch (error) {
+            console.warn("Clipboard API failed, trying fallback.", error);
+        }
+    }
+
+    const helper = document.createElement('textarea');
+    helper.value = value;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'fixed';
+    helper.style.opacity = '0';
+    helper.style.pointerEvents = 'none';
+
+    document.body.appendChild(helper);
+    helper.focus();
+    helper.select();
+
+    try {
+        const copied = document.execCommand('copy');
+        if (!copied) {
+            throw new Error('execCommand returned false');
+        }
+    } finally {
+        helper.remove();
+    }
+};
+
 // Listen for disco mode toggle messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'toggleDiscoMode') {
-        const button = document.getElementById('send-data-button');
-        if (button) {
+        ['send-data-button', 'open-resto-button'].forEach((buttonId) => {
+            const button = document.getElementById(buttonId);
+            if (!button) return;
+
             if (message.discoMode) {
                 applyDiscoStyle(button);
             } else {
                 removeDiscoStyle(button);
             }
-        }
+        });
     }
 });
 
@@ -161,15 +194,24 @@ const getUserInputFromStorage = async () => {
                 button.style.cursor = "pointer";
                 button.style.transition = "all 0.3s ease";
 
+                const restoButton = document.createElement('button');
+                restoButton.id = "open-resto-button";
+                restoButton.textContent = "Відкрити вебморду";
+                restoButton.style.marginLeft = "10px";
+                restoButton.style.cursor = "pointer";
+                restoButton.style.transition = "all 0.3s ease";
+
                 // Apply disco mode if enabled
                 chrome.storage.local.get(['discoMode'], (result) => {
                     if (result.discoMode) {
                         applyDiscoStyle(button);
+                        applyDiscoStyle(restoButton);
                     }
                 });
 
                 // Додаємо кнопку до обгортки
                 wrapper.appendChild(button);
+                wrapper.appendChild(restoButton);
 
                 // Додаємо обробник події для кнопки
                 button.addEventListener('click', async () => {
@@ -219,6 +261,26 @@ const getUserInputFromStorage = async () => {
                     } catch (error) {
                         console.error("Помилка мережі:", error);
                     }
+                });
+
+                restoButton.addEventListener('click', async () => {
+                    const rawField72Value = field72ValueElement.textContent.trim();
+                    const server = extractDaoCloudAddress(rawField72Value);
+
+                    if (!server) {
+                        alert("Адресу сервера не знайдено. Перевірте поле адреси.");
+                        return;
+                    }
+
+                    try {
+                        await copyTextToClipboard(server);
+                    } catch (error) {
+                        console.error("Не вдалося скопіювати адресу сервера:", error);
+                        alert("Не вдалося скопіювати адресу сервера.");
+                        return;
+                    }
+
+                    window.open(`https://${server}/resto`, '_blank');
                 });
             }
         };

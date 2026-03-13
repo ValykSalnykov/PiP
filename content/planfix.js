@@ -127,7 +127,7 @@ const copyTextToClipboard = async (value) => {
 // Listen for disco mode toggle messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'toggleDiscoMode') {
-        ['send-data-button', 'open-resto-button'].forEach((buttonId) => {
+        ['send-data-button'].forEach((buttonId) => {
             const button = document.getElementById(buttonId);
             if (!button) return;
 
@@ -194,24 +194,15 @@ const getUserInputFromStorage = async () => {
                 button.style.cursor = "pointer";
                 button.style.transition = "all 0.3s ease";
 
-                const restoButton = document.createElement('button');
-                restoButton.id = "open-resto-button";
-                restoButton.textContent = "Відкрити вебморду";
-                restoButton.style.marginLeft = "10px";
-                restoButton.style.cursor = "pointer";
-                restoButton.style.transition = "all 0.3s ease";
-
                 // Apply disco mode if enabled
                 chrome.storage.local.get(['discoMode'], (result) => {
                     if (result.discoMode) {
                         applyDiscoStyle(button);
-                        applyDiscoStyle(restoButton);
                     }
                 });
 
                 // Додаємо кнопку до обгортки
                 wrapper.appendChild(button);
-                wrapper.appendChild(restoButton);
 
                 // Додаємо обробник події для кнопки
                 button.addEventListener('click', async () => {
@@ -262,26 +253,6 @@ const getUserInputFromStorage = async () => {
                         console.error("Помилка мережі:", error);
                     }
                 });
-
-                restoButton.addEventListener('click', async () => {
-                    const rawField72Value = field72ValueElement.textContent.trim();
-                    const server = extractDaoCloudAddress(rawField72Value);
-
-                    if (!server) {
-                        alert("Адресу сервера не знайдено. Перевірте поле адреси.");
-                        return;
-                    }
-
-                    try {
-                        await copyTextToClipboard(server);
-                    } catch (error) {
-                        console.error("Не вдалося скопіювати адресу сервера:", error);
-                        alert("Не вдалося скопіювати адресу сервера.");
-                        return;
-                    }
-
-                    window.open(`https://${server}/resto`, '_blank');
-                });
             }
         };
 
@@ -314,6 +285,22 @@ const getUserInputFromStorage = async () => {
     const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
     const BUTTONS_ID = "license-buttons-panel";
 
+    const getServerData = () => {
+        const serverField = document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
+        const rawServer = serverField ? serverField.textContent.trim() : '';
+        const server = extractDaoCloudAddress(rawServer);
+
+        if (!server) {
+            alert("Адресу сервера не знайдено. Перевірте поле адреси.");
+            return null;
+        }
+
+        const portField = document.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
+        const port = portField ? portField.textContent.trim() : '';
+
+        return { server, port };
+    };
+
     const createLicenseBtn = (label, action, color) => {
         const btn = document.createElement('button');
         btn.textContent = label;
@@ -333,14 +320,48 @@ const getUserInputFromStorage = async () => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = "0.82"; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = "1"; });
         btn.addEventListener('click', () => {
-            const serverField = document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
-            const rawServer = serverField ? serverField.textContent.trim() : '';
-            const server = extractDaoCloudAddress(rawServer);
-            if (!server) { alert("Адресу сервера не знайдено. Перевірте поле адреси."); return; }
-            const portField = document.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
-            const port = portField ? portField.textContent.trim() : '';
+            const serverData = getServerData();
+            if (!serverData) return;
+
+            const { server, port } = serverData;
             const portParam = port ? `&port=${encodeURIComponent(port)}` : '';
             window.open(`${LICENSE_MANAGER_BASE}?server=${encodeURIComponent(server)}${portParam}&action=${action}`, '_blank');
+        });
+        return btn;
+    };
+
+    const createRestoBtn = () => {
+        const btn = document.createElement('button');
+        btn.id = 'open-resto-button';
+        btn.textContent = 'Відкрити вебморду';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #2563eb;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
+        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+        btn.addEventListener('click', async () => {
+            const serverData = getServerData();
+            if (!serverData) return;
+
+            try {
+                await copyTextToClipboard(serverData.server);
+            } catch (error) {
+                console.error('Не вдалося скопіювати адресу сервера:', error);
+                alert('Не вдалося скопіювати адресу сервера.');
+                return;
+            }
+
+            window.open(`https://${serverData.server}/resto`, '_blank');
         });
         return btn;
     };
@@ -365,6 +386,7 @@ const getUserInputFromStorage = async () => {
         `;
         container.appendChild(createLicenseBtn("✓ Перевірити ліцензії", "check", "#059669"));
         container.appendChild(createLicenseBtn("↻ Оновити ліцензії", "update", "#d97706"));
+        container.appendChild(createRestoBtn());
 
         wrapperBox.after(container);
     };

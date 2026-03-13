@@ -159,6 +159,201 @@ const getUserInputFromStorage = async () => {
     });
 };
 
+const CARD_BUTTONS_ID = 'license-buttons-panel';
+const CARD_ERROR_ID = 'license-buttons-panel-error';
+const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
+const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it', 'daocloud.fun'];
+
+let cardErrorPollToken = 0;
+
+const normalizeServerHost = (value) => {
+    const rawValue = (value || '').trim();
+    if (!rawValue) return '';
+
+    const candidate = /^[a-z]+:\/\//i.test(rawValue) ? rawValue : `https://${rawValue}`;
+
+    try {
+        return new URL(candidate).hostname.trim().toLowerCase();
+    } catch (error) {
+        return rawValue
+            .replace(/^https?:\/\//i, '')
+            .split('/')[0]
+            .trim()
+            .toLowerCase();
+    }
+};
+
+const resolveCardServerContext = (server, port) => {
+    const normalizedServer = normalizeServerHost(server);
+    if (!normalizedServer) {
+        return null;
+    }
+
+    const resolvedPort = SECURE_DEFAULT_PORT_DOMAINS.some((domain) => normalizedServer.endsWith(domain))
+        ? '443'
+        : (port || '').trim();
+
+    return {
+        server: normalizedServer,
+        port: resolvedPort
+    };
+};
+
+const invalidateCardErrorPolling = () => {
+    cardErrorPollToken += 1;
+};
+
+const wait = (delay) => new Promise((resolve) => {
+    setTimeout(resolve, delay);
+});
+
+const ensureCardErrorNode = () => {
+    let errorNode = document.getElementById(CARD_ERROR_ID);
+    if (errorNode) {
+        const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
+        if (buttonsContainer && errorNode.previousElementSibling !== buttonsContainer) {
+            buttonsContainer.after(errorNode);
+        }
+        return errorNode;
+    }
+
+    errorNode = document.createElement('div');
+    errorNode.id = CARD_ERROR_ID;
+    errorNode.style.cssText = `
+        display: none;
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(220, 38, 38, 0.18);
+        background: rgba(220, 38, 38, 0.08);
+        color: #dc2626;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+    `;
+
+    const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
+    if (buttonsContainer) {
+        buttonsContainer.after(errorNode);
+        return errorNode;
+    }
+
+    const wrapperBox = document.querySelector('.field-target[f-id="72"] .object-edit-field-bottom-panel-rc__wrapper-box');
+    if (wrapperBox) {
+        wrapperBox.after(errorNode);
+    }
+
+    return errorNode;
+};
+
+const setCardErrorMessage = (message) => {
+    const errorNode = ensureCardErrorNode();
+    if (!errorNode) return;
+
+    const normalizedMessage = (message || '').trim();
+    errorNode.textContent = normalizedMessage;
+    errorNode.style.display = normalizedMessage ? 'block' : 'none';
+};
+
+const clearCardErrorMessage = () => {
+    setCardErrorMessage('');
+};
+
+const fetchLastErrorForClient = async (clientId) => {
+    const response = await fetch('https://planfix-to-syrve.com:8000/get_last_error/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ client_id: clientId }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`Bad request, plugin could not reach server. Status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return (data.last_error || '').trim();
+};
+
+const isCardErrorRelevantToServer = (errorText, context) => {
+    if (!errorText || !context?.server) {
+        return false;
+    }
+
+    const normalizedError = errorText.toLowerCase();
+    const candidates = [context.server.toLowerCase()];
+
+    if (context.port) {
+        candidates.push(`${context.server.toLowerCase()}:${context.port}`);
+        candidates.push(`port ${context.port}`);
+        candidates.push(`порт ${context.port}`);
+    }
+
+    return candidates.some((candidate) => normalizedError.includes(candidate));
+};
+
+const refreshCardServerError = async (context, options = {}) => {
+    const { forceShowAnyError = false } = options;
+    if (!context?.server) {
+        clearCardErrorMessage();
+        return false;
+    }
+
+    try {
+        const clientId = await getUserInputFromStorage();
+        if (!clientId || clientId === 'default_value') {
+            clearCardErrorMessage();
+            return false;
+        }
+
+        const lastError = await fetchLastErrorForClient(clientId);
+        if (!lastError) {
+            clearCardErrorMessage();
+            return false;
+        }
+
+        if (forceShowAnyError || isCardErrorRelevantToServer(lastError, context)) {
+            setCardErrorMessage(`Остання помилка для сервера ${context.server}${context.port ? `:${context.port}` : ''}:\n${lastError}`);
+            return true;
+        }
+
+        clearCardErrorMessage();
+        return false;
+    } catch (error) {
+        console.error('Не вдалося отримати останню помилку для картки:', error);
+        clearCardErrorMessage();
+        return false;
+    }
+};
+
+const pollCardServerError = async (context, options = {}) => {
+    const { forceShowAnyError = false, fallbackMessage = '' } = options;
+    const pollToken = ++cardErrorPollToken;
+
+    for (const delay of CARD_ERROR_POLL_DELAYS) {
+        if (delay > 0) {
+            await wait(delay);
+        }
+
+        if (pollToken !== cardErrorPollToken) {
+            return false;
+        }
+
+        const rendered = await refreshCardServerError(context, { forceShowAnyError });
+        if (rendered) {
+            return true;
+        }
+    }
+
+    if (pollToken === cardErrorPollToken && fallbackMessage) {
+        setCardErrorMessage(fallbackMessage);
+        return true;
+    }
+
+    return false;
+};
+
 // Основна логіка
 (async () => {
     console.log("Очікуємо завантаження елемента...");
@@ -207,10 +402,13 @@ const getUserInputFromStorage = async () => {
                 // Додаємо обробник події для кнопки
                 button.addEventListener('click', async () => {
                     console.log("Кнопка натиснута.");
+                    invalidateCardErrorPolling();
+                    clearCardErrorMessage();
 
                     const rawField72Value = field72ValueElement.textContent.trim();
-                    const field72Value = extractDaoCloudAddress(rawField72Value);
-                    if (!field72Value) {
+                    const extractedServer = extractDaoCloudAddress(rawField72Value);
+                    const serverContext = resolveCardServerContext(extractedServer, '');
+                    if (!serverContext?.server) {
                         console.warn("Адреса сервера не знайдена, дію скасовано.");
                         return;
                     }
@@ -219,6 +417,7 @@ const getUserInputFromStorage = async () => {
                         "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(7) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
                     );
                     const field74Value = field74ValueElement ? field74ValueElement.textContent.trim() : null;
+                    const finalServerContext = resolveCardServerContext(serverContext.server, field74Value);
 
                     // Отримуємо збережене значення з chrome.storage
                     try {
@@ -227,8 +426,8 @@ const getUserInputFromStorage = async () => {
 
                         // Формуємо дані для запиту
                         const payload = {
-                            address: field72Value,
-                            port: field74Value,
+                            address: finalServerContext?.server || serverContext.server,
+                            port: finalServerContext?.port || '',
                             client_id: savedField,
                         };
 
@@ -246,13 +445,32 @@ const getUserInputFromStorage = async () => {
                         if (response.ok) {
                             console.log(await response.json(), response.status);
                             console.log("Дані успішно надіслано.");
+                            await pollCardServerError(finalServerContext || serverContext);
                         } else {
                             console.error("Помилка при надсиланні:", response.status, response.statusText);
+                            await pollCardServerError(finalServerContext || serverContext, {
+                                fallbackMessage: `Не вдалося виконати запит до сервера ${(finalServerContext || serverContext).server}${(finalServerContext || serverContext).port ? `:${(finalServerContext || serverContext).port}` : ''}. Код відповіді: ${response.status}.`
+                            });
                         }
                     } catch (error) {
                         console.error("Помилка мережі:", error);
+                        setCardErrorMessage(`Помилка підключення до сервера ${(finalServerContext || serverContext).server}${(finalServerContext || serverContext).port ? `:${(finalServerContext || serverContext).port}` : ''}. Перевірте адресу, порт та доступність сервера.`);
                     }
                 });
+
+                const initialPortElement = document.querySelector(
+                    "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(7) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
+                );
+                const initialContext = resolveCardServerContext(
+                    extractDaoCloudAddress(field72ValueElement.textContent.trim()),
+                    initialPortElement ? initialPortElement.textContent.trim() : ''
+                );
+
+                if (initialContext) {
+                    pollCardServerError(initialContext).catch((error) => {
+                        console.error('Не вдалося оновити помилку для картки:', error);
+                    });
+                }
             }
         };
 
@@ -283,22 +501,24 @@ const getUserInputFromStorage = async () => {
 // --- Логіка для сторінки з панеллю полів (f-id="72") ---
 (async () => {
     const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
-    const BUTTONS_ID = "license-buttons-panel";
+    const BUTTONS_ID = CARD_BUTTONS_ID;
 
-    const getServerData = () => {
+    const getServerData = (showAlert = true) => {
         const serverField = document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
         const rawServer = serverField ? serverField.textContent.trim() : '';
-        const server = extractDaoCloudAddress(rawServer);
+        const extractedServer = extractDaoCloudAddress(rawServer);
 
-        if (!server) {
-            alert("Адресу сервера не знайдено. Перевірте поле адреси.");
+        if (!extractedServer) {
+            if (showAlert) {
+                alert("Адресу сервера не знайдено. Перевірте поле адреси.");
+            }
             return null;
         }
 
         const portField = document.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
         const port = portField ? portField.textContent.trim() : '';
 
-        return { server, port };
+        return resolveCardServerContext(extractedServer, port);
     };
 
     const createLicenseBtn = (label, action, color) => {
@@ -320,8 +540,13 @@ const getUserInputFromStorage = async () => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = "0.82"; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = "1"; });
         btn.addEventListener('click', () => {
-            const serverData = getServerData();
+            const serverData = getServerData(true);
             if (!serverData) return;
+
+            invalidateCardErrorPolling();
+            pollCardServerError(serverData).catch((error) => {
+                console.error('Не вдалося оновити помилку під кнопками ліцензії:', error);
+            });
 
             const { server, port } = serverData;
             const portParam = port ? `&port=${encodeURIComponent(port)}` : '';
@@ -350,8 +575,13 @@ const getUserInputFromStorage = async () => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', async () => {
-            const serverData = getServerData();
+            const serverData = getServerData(true);
             if (!serverData) return;
+
+            invalidateCardErrorPolling();
+            pollCardServerError(serverData).catch((error) => {
+                console.error('Не вдалося оновити помилку під кнопкою вебморди:', error);
+            });
 
             try {
                 await copyTextToClipboard(serverData.server);
@@ -389,6 +619,16 @@ const getUserInputFromStorage = async () => {
         container.appendChild(createRestoBtn());
 
         wrapperBox.after(container);
+        ensureCardErrorNode();
+
+        const serverData = getServerData(false);
+        if (serverData) {
+            pollCardServerError(serverData).catch((error) => {
+                console.error('Не вдалося оновити помилку при ініціалізації картки:', error);
+            });
+        } else {
+            clearCardErrorMessage();
+        }
     };
 
     // Використовуємо MutationObserver для очікування появи елемента
@@ -399,6 +639,8 @@ const getUserInputFromStorage = async () => {
         // Прибираємо кнопки при зміні сторінки, щоб уникнути дублювання
         if (!document.querySelector('.field-target[f-id="72"]') && document.getElementById(BUTTONS_ID)) {
             document.getElementById(BUTTONS_ID).remove();
+            document.getElementById(CARD_ERROR_ID)?.remove();
+            invalidateCardErrorPolling();
         }
     });
 

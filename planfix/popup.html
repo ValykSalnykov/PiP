@@ -293,6 +293,22 @@
     #errorMessage:empty {
       display: none;
     }
+
+    .inline-server-error {
+      display: none;
+      margin: 0;
+      font-size: 0.78rem;
+      color: #dc2626;
+      white-space: pre-wrap;
+      background: rgba(220, 38, 38, 0.08);
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid rgba(220, 38, 38, 0.18);
+    }
+
+    .inline-server-error.is-visible {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -336,6 +352,7 @@
         <button id="checkLicenseButton" class="button button--success">✓ Перевірити</button>
         <button id="updateLicenseButton" class="button button--warning">↻ Оновити</button>
       </div>
+      <div id="inlineServerError" class="inline-server-error" aria-live="polite"></div>
     </section>
 
     <section class="card" aria-labelledby="mode-management">

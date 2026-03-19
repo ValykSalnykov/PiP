@@ -27,6 +27,9 @@
     "https://*.us-central1.hosted.app/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
+    "https://*.syrve.online/*",
+    "https://*.daocloud.it/*",
+    "https://*.daocloud.fun/*",
     "https://planfix-to-syrve.com:8000/*",
     "https://syrve-license-manager-1038989357415.us-west1.run.app/*"
   ],
@@ -60,6 +63,17 @@
       "js": [
         "content/planfix.js"
       ]
+    },
+    {
+      "matches": [
+        "https://*.syrve.online/resto*",
+        "https://*.daocloud.it/resto*",
+        "https://*.daocloud.fun/resto*"
+      ],
+      "js": [
+        "content/syrve-autofill.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [

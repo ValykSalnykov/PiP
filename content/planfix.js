@@ -137,6 +137,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 removeDiscoStyle(button);
             }
         });
+        return;
+    }
+
+    if (message.action === 'HEALTH_PERIOD_RESULT') {
+        if (!message.requestId || message.requestId !== activePeriodRequestId) {
+            return;
+        }
+
+        activePeriodRequestId = null;
+
+        if (message.error) {
+            setCardPeriodMessage(`Не вдалося отримати період: ${message.error}`);
+            return;
+        }
+
+        if (message.period === undefined || message.period === null || message.period === '') {
+            setCardPeriodMessage('Не вдалося отримати період: значення відсутнє.');
+            return;
+        }
+
+        setCardPeriodMessage(`Період: ${message.period} днів`);
     }
 });
 
@@ -161,10 +182,12 @@ const getUserInputFromStorage = async () => {
 
 const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
+const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it', 'daocloud.fun'];
 
 let cardErrorPollToken = 0;
+let activePeriodRequestId = null;
 
 const normalizeServerHost = (value) => {
     const rawValue = (value || '').trim();
@@ -211,8 +234,10 @@ const ensureCardErrorNode = () => {
     let errorNode = document.getElementById(CARD_ERROR_ID);
     if (errorNode) {
         const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
-        if (buttonsContainer && errorNode.previousElementSibling !== buttonsContainer) {
-            buttonsContainer.after(errorNode);
+        const periodNode = document.getElementById(CARD_PERIOD_ID);
+        const anchorNode = periodNode || buttonsContainer;
+        if (anchorNode && errorNode.previousElementSibling !== anchorNode) {
+            anchorNode.after(errorNode);
         }
         return errorNode;
     }
@@ -233,8 +258,10 @@ const ensureCardErrorNode = () => {
     `;
 
     const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
-    if (buttonsContainer) {
-        buttonsContainer.after(errorNode);
+    const periodNode = document.getElementById(CARD_PERIOD_ID);
+    const anchorNode = periodNode || buttonsContainer;
+    if (anchorNode) {
+        anchorNode.after(errorNode);
         return errorNode;
     }
 
@@ -244,6 +271,56 @@ const ensureCardErrorNode = () => {
     }
 
     return errorNode;
+};
+
+const ensureCardPeriodNode = () => {
+    let periodNode = document.getElementById(CARD_PERIOD_ID);
+    if (periodNode) {
+        const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
+        if (buttonsContainer && periodNode.previousElementSibling !== buttonsContainer) {
+            buttonsContainer.after(periodNode);
+        }
+        return periodNode;
+    }
+
+    periodNode = document.createElement('div');
+    periodNode.id = CARD_PERIOD_ID;
+    periodNode.style.cssText = `
+        display: none;
+        margin-top: 8px;
+        padding: 6px 2px 0 2px;
+        color: #0f172a;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        font-weight: 600;
+    `;
+
+    const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
+    if (buttonsContainer) {
+        buttonsContainer.after(periodNode);
+        return periodNode;
+    }
+
+    const wrapperBox = document.querySelector('.field-target[f-id="72"] .object-edit-field-bottom-panel-rc__wrapper-box');
+    if (wrapperBox) {
+        wrapperBox.after(periodNode);
+    }
+
+    return periodNode;
+};
+
+const setCardPeriodMessage = (message) => {
+    const periodNode = ensureCardPeriodNode();
+    if (!periodNode) return;
+
+    const normalizedMessage = (message || '').trim();
+    periodNode.textContent = normalizedMessage;
+    periodNode.style.display = normalizedMessage ? 'block' : 'none';
+};
+
+const clearCardPeriodMessage = () => {
+    setCardPeriodMessage('');
 };
 
 const setCardErrorMessage = (message) => {
@@ -596,6 +673,86 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
+    const createDevicesBtn = () => {
+        const btn = document.createElement('button');
+        btn.id = 'open-connections-button';
+        btn.textContent = 'Пристрої';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #7c3aed;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
+        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+        btn.addEventListener('click', () => {
+            const serverData = getServerData(true);
+            if (!serverData) return;
+
+            window.open(`https://${serverData.server}/resto/service/monitoring/connections.jsp`, '_blank');
+        });
+        return btn;
+    };
+
+    const createPeriodBtn = () => {
+        const btn = document.createElement('button');
+        btn.id = 'get-period-button';
+        btn.textContent = 'Період';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #0891b2;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
+        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+        btn.addEventListener('click', () => {
+            const serverData = getServerData(true);
+            if (!serverData) return;
+
+            if (activePeriodRequestId) {
+                setCardPeriodMessage('Отримання періоду вже виконується...');
+                return;
+            }
+
+            const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            activePeriodRequestId = requestId;
+            setCardPeriodMessage('Отримання періоду...');
+
+            chrome.runtime.sendMessage({
+                action: 'OPEN_HEALTH_PERIOD_TAB',
+                server: serverData.server,
+                requestId
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    activePeriodRequestId = null;
+                    setCardPeriodMessage(`Не вдалося отримати період: ${chrome.runtime.lastError.message}`);
+                    return;
+                }
+
+                if (!response?.ok) {
+                    activePeriodRequestId = null;
+                    setCardPeriodMessage(`Не вдалося отримати період: ${response?.error || 'невідома помилка'}`);
+                }
+            });
+        });
+        return btn;
+    };
+
     const injectPanelButtons = () => {
         if (document.getElementById(BUTTONS_ID)) return;
 
@@ -617,8 +774,11 @@ const pollCardServerError = async (context, options = {}) => {
         container.appendChild(createLicenseBtn("✓ Перевірити ліцензії", "check", "#059669"));
         container.appendChild(createLicenseBtn("↻ Оновити ліцензії", "update", "#d97706"));
         container.appendChild(createRestoBtn());
+        container.appendChild(createDevicesBtn());
+        container.appendChild(createPeriodBtn());
 
         wrapperBox.after(container);
+        ensureCardPeriodNode();
         ensureCardErrorNode();
 
         const serverData = getServerData(false);
@@ -627,6 +787,7 @@ const pollCardServerError = async (context, options = {}) => {
                 console.error('Не вдалося оновити помилку при ініціалізації картки:', error);
             });
         } else {
+            clearCardPeriodMessage();
             clearCardErrorMessage();
         }
     };
@@ -639,8 +800,10 @@ const pollCardServerError = async (context, options = {}) => {
         // Прибираємо кнопки при зміні сторінки, щоб уникнути дублювання
         if (!document.querySelector('.field-target[f-id="72"]') && document.getElementById(BUTTONS_ID)) {
             document.getElementById(BUTTONS_ID).remove();
+            document.getElementById(CARD_PERIOD_ID)?.remove();
             document.getElementById(CARD_ERROR_ID)?.remove();
             invalidateCardErrorPolling();
+            activePeriodRequestId = null;
         }
     });
 

@@ -27,7 +27,9 @@ function createLogger(scope, level = 'info') {
 const log = createLogger('background', 'info');
 
 const TAB_STATE = new Map();
+const HEALTH_PERIOD_REQUESTS = new Map();
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
+const HEALTH_PERIOD_TIMEOUT_MS = 30000;
 
 chrome.runtime.onInstalled.addListener(() => {
   log.info('Extension installed or updated');
@@ -101,47 +103,88 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Handle messages from pip-page
-  if (!message || message.source !== 'pip-page') return;
+  if (message?.source === 'pip-page') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) return false;
 
-  const tabId = sender.tab?.id;
-  if (tabId === undefined) return;
+    log.debug('Message received from pip-page', { tabId, type: message.type });
 
-  log.debug('Message received from pip-page', { tabId, type: message.type });
+    switch (message.type) {
+      case 'PIP_STATE':
+        TAB_STATE.set(tabId, message.state === 'open');
+        updateBadge(tabId);
+        log.info('Updated PiP state', {
+          tabId,
+          state: message.state,
+          trigger: message.trigger
+        });
+        break;
+      case 'PIP_UNSUPPORTED':
+        TAB_STATE.delete(tabId);
+        chrome.action.setBadgeText({ tabId, text: '!' });
+        setTimeout(() => chrome.action.setBadgeText({ tabId, text: '' }), 2500);
+        log.warn('Tab reported PiP as unsupported', {
+          tabId,
+          reason: message.reason,
+          details: message.message
+        });
+        break;
+      case 'PIP_RESTORE_REQUEST':
+        log.info('Tab requested PiP restore', { tabId, trigger: message.trigger });
+        requestToggle(tabId, 'page-request');
+        break;
+      default:
+        log.debug('Unknown message type received', { tabId, type: message.type });
+        break;
+    }
 
-  switch (message.type) {
-    case 'PIP_STATE':
-      TAB_STATE.set(tabId, message.state === 'open');
-      updateBadge(tabId);
-      log.info('Updated PiP state', {
-        tabId,
-        state: message.state,
-        trigger: message.trigger
-      });
-      break;
-    case 'PIP_UNSUPPORTED':
-      TAB_STATE.delete(tabId);
-      chrome.action.setBadgeText({ tabId, text: '!' });
-      setTimeout(() => chrome.action.setBadgeText({ tabId, text: '' }), 2500);
-      log.warn('Tab reported PiP as unsupported', {
-        tabId,
-        reason: message.reason,
-        details: message.message
-      });
-      break;
-    case 'PIP_RESTORE_REQUEST':
-      log.info('Tab requested PiP restore', { tabId, trigger: message.trigger });
-      requestToggle(tabId, 'page-request');
-      break;
-    default:
-      log.debug('Unknown message type received', { tabId, type: message.type });
-      break;
+    return false;
   }
+
+  if (message?.action === 'OPEN_HEALTH_PERIOD_TAB') {
+    const requesterTabId = sender.tab?.id;
+    if (requesterTabId === undefined || !message.server || !message.requestId) {
+      sendResponse({ ok: false, error: 'Missing requester tab, server, or request id' });
+      return false;
+    }
+
+    openHealthPeriodTab({
+      requesterTabId,
+      server: message.server,
+      requestId: message.requestId
+    })
+      .then((serviceTabId) => sendResponse({ ok: true, tabId: serviceTabId }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open health tab' }));
+
+    return true;
+  }
+
+  if (message?.action === 'SYRVE_HEALTH_PERIOD_RESULT') {
+    const serviceTabId = sender.tab?.id;
+    if (serviceTabId === undefined) return false;
+
+    finalizeHealthPeriodRequest(serviceTabId, {
+      period: message.period,
+      error: message.error
+    });
+  }
+
+  return false;
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (TAB_STATE.delete(tabId)) {
     log.debug('Cleared PiP state for closed tab', { tabId });
+  }
+
+  const request = HEALTH_PERIOD_REQUESTS.get(tabId);
+  if (request) {
+    HEALTH_PERIOD_REQUESTS.delete(tabId);
+    clearTimeout(request.timeoutId);
+    notifyHealthPeriodResult(request.requesterTabId, {
+      requestId: request.requestId,
+      error: 'Службова вкладка отримання періоду була закрита раніше завершення.'
+    });
   }
 });
 
@@ -159,4 +202,68 @@ function updateBadge(tabId) {
   const isOpen = TAB_STATE.get(tabId) === true;
   chrome.action.setBadgeText({ tabId, text: isOpen ? 'ON' : '' });
   log.debug('Badge updated', { tabId, status: isOpen ? 'ON' : 'OFF' });
+}
+
+async function openHealthPeriodTab({ requesterTabId, server, requestId }) {
+  const createdTab = await chrome.tabs.create({
+    url: `https://${server}/resto/service/monitoring/health.jsp`,
+    active: false
+  });
+
+  if (createdTab.id === undefined) {
+    throw new Error('Health tab was created without an id');
+  }
+
+  const timeoutId = setTimeout(() => {
+    finalizeHealthPeriodRequest(createdTab.id, {
+      error: 'Перевищено час очікування відповіді від сторінки health.jsp.'
+    });
+  }, HEALTH_PERIOD_TIMEOUT_MS);
+
+  HEALTH_PERIOD_REQUESTS.set(createdTab.id, {
+    requesterTabId,
+    requestId,
+    timeoutId
+  });
+
+  log.info('Opened health period tab', {
+    requesterTabId,
+    serviceTabId: createdTab.id,
+    server,
+    requestId
+  });
+
+  return createdTab.id;
+}
+
+function finalizeHealthPeriodRequest(serviceTabId, result) {
+  const request = HEALTH_PERIOD_REQUESTS.get(serviceTabId);
+  if (!request) {
+    return;
+  }
+
+  HEALTH_PERIOD_REQUESTS.delete(serviceTabId);
+  clearTimeout(request.timeoutId);
+
+  notifyHealthPeriodResult(request.requesterTabId, {
+    requestId: request.requestId,
+    period: result.period,
+    error: result.error
+  });
+
+  chrome.tabs.remove(serviceTabId).catch((error) => {
+    log.debug('Health period tab already closed', { serviceTabId, error: error?.message });
+  });
+}
+
+function notifyHealthPeriodResult(requesterTabId, payload) {
+  chrome.tabs.sendMessage(requesterTabId, {
+    action: 'HEALTH_PERIOD_RESULT',
+    ...payload
+  }).catch((error) => {
+    log.warn('Failed to deliver health period result to PlanFix tab', {
+      requesterTabId,
+      error: error?.message
+    });
+  });
 }

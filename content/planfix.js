@@ -183,11 +183,15 @@ const getUserInputFromStorage = async () => {
 const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
+const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
+const CARD_LOGIN_LONG_WAIT_MS = 7000;
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it', 'daocloud.fun'];
 
 let cardErrorPollToken = 0;
 let activePeriodRequestId = null;
+let cardLoginStatusTimeoutId = 0;
+let cardLoginRequestToken = 0;
 
 const normalizeServerHost = (value) => {
     const rawValue = (value || '').trim();
@@ -336,6 +340,150 @@ const clearCardErrorMessage = () => {
     setCardErrorMessage('');
 };
 
+const getCardLoginStatusNode = () => document.getElementById(CARD_LOGIN_STATUS_ID);
+
+const clearCardLoginStatusTimeout = () => {
+    if (!cardLoginStatusTimeoutId) {
+        return;
+    }
+
+    clearTimeout(cardLoginStatusTimeoutId);
+    cardLoginStatusTimeoutId = 0;
+};
+
+const setCardLoginButtonState = (isLoading) => {
+    const button = document.getElementById('send-data-button');
+    if (!button) return;
+
+    button.disabled = isLoading;
+    button.style.cursor = isLoading ? 'wait' : 'pointer';
+    button.style.opacity = isLoading ? '0.82' : '1';
+};
+
+const syncCardLoginStatusHeight = () => {
+    const statusNode = getCardLoginStatusNode();
+    const button = document.getElementById('send-data-button');
+    if (!statusNode || !button) return;
+
+    const buttonHeight = Math.round(button.getBoundingClientRect().height);
+    if (!buttonHeight) return;
+
+    statusNode.style.height = `${buttonHeight}px`;
+    statusNode.style.minHeight = `${buttonHeight}px`;
+};
+
+const ensureCardLoginStatusNode = () => {
+    let statusNode = getCardLoginStatusNode();
+    const button = document.getElementById('send-data-button');
+
+    if (!button) {
+        statusNode?.remove();
+        return null;
+    }
+
+    if (!statusNode) {
+        statusNode = document.createElement('span');
+        statusNode.id = CARD_LOGIN_STATUS_ID;
+        statusNode.setAttribute('role', 'status');
+        statusNode.setAttribute('aria-live', 'polite');
+        statusNode.setAttribute('aria-atomic', 'true');
+        statusNode.style.cssText = `
+            display: none;
+            align-items: center;
+            gap: 6px;
+            margin-left: 8px;
+            padding: 0 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(37, 99, 235, 0.16);
+            background: rgba(79, 70, 229, 0.08);
+            color: #4338ca;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1;
+            white-space: nowrap;
+            box-sizing: border-box;
+        `;
+        button.insertAdjacentElement('afterend', statusNode);
+    } else if (statusNode.previousElementSibling !== button) {
+        button.insertAdjacentElement('afterend', statusNode);
+    }
+
+    syncCardLoginStatusHeight();
+
+    return statusNode;
+};
+
+const setCardLoginStatus = (state) => {
+    const statusNode = ensureCardLoginStatusNode();
+    if (!statusNode) return;
+
+    const stateMap = {
+        sending: {
+            icon: '⟳',
+            text: 'Відправка...',
+            background: 'rgba(79, 70, 229, 0.08)',
+            border: 'rgba(79, 70, 229, 0.18)',
+            color: '#4338ca'
+        },
+        waiting: {
+            icon: '⟳',
+            text: 'Вхід виконується...',
+            background: 'rgba(37, 99, 235, 0.08)',
+            border: 'rgba(37, 99, 235, 0.18)',
+            color: '#1d4ed8'
+        },
+        success: {
+            icon: '✓',
+            text: 'Готово',
+            background: 'rgba(5, 150, 105, 0.12)',
+            border: 'rgba(5, 150, 105, 0.2)',
+            color: '#047857'
+        },
+        timeout: {
+            icon: '⏱',
+            text: 'Довге очікування',
+            background: 'rgba(217, 119, 6, 0.12)',
+            border: 'rgba(217, 119, 6, 0.22)',
+            color: '#b45309'
+        }
+    };
+
+    const config = stateMap[state];
+    if (!config) {
+        statusNode.textContent = '';
+        statusNode.style.display = 'none';
+        return;
+    }
+
+    statusNode.textContent = `${config.icon} ${config.text}`;
+    statusNode.style.display = 'inline-flex';
+    statusNode.style.background = config.background;
+    statusNode.style.borderColor = config.border;
+    statusNode.style.color = config.color;
+};
+
+const resetCardLoginStatus = () => {
+    clearCardLoginStatusTimeout();
+    setCardLoginButtonState(false);
+    setCardLoginStatus('idle');
+};
+
+const invalidateCardLoginRequest = () => {
+    cardLoginRequestToken += 1;
+    resetCardLoginStatus();
+};
+
+const scheduleCardLoginLongWait = (requestToken) => {
+    clearCardLoginStatusTimeout();
+    cardLoginStatusTimeoutId = window.setTimeout(() => {
+        if (requestToken !== cardLoginRequestToken) {
+            return;
+        }
+
+        setCardLoginStatus('timeout');
+    }, CARD_LOGIN_LONG_WAIT_MS);
+};
+
 const fetchLastErrorForClient = async (clientId) => {
     const response = await fetch('https://planfix-to-syrve.com:8000/get_last_error/', {
         method: 'POST',
@@ -453,6 +601,7 @@ const pollCardServerError = async (context, options = {}) => {
                 const wrapper = document.createElement('div');
                 wrapper.style.display = "flex";
                 wrapper.style.alignItems = "center";
+                wrapper.style.gap = "10px";
 
                 // Переміщуємо текстовий елемент у нову обгортку
                 field72ValueElement.parentElement.insertBefore(wrapper, field72ValueElement);
@@ -462,9 +611,30 @@ const pollCardServerError = async (context, options = {}) => {
                 const button = document.createElement('button');
                 button.id = "send-data-button";
                 button.textContent = "Увійти в бекофіс";
-                button.style.marginLeft = "10px"; // Відступ між текстом і кнопкою
-                button.style.cursor = "pointer";
-                button.style.transition = "all 0.3s ease";
+                button.style.cssText = `
+                    cursor: pointer;
+                    padding: 5px 14px;
+                    min-height: 32px;
+                    border-radius: 6px;
+                    border: none;
+                    font-weight: 600;
+                    font-size: 13px;
+                    background: #f87171;
+                    color: #fff;
+                    transition: opacity 0.2s ease;
+                    white-space: nowrap;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    line-height: 1.2;
+                    flex: 0 0 auto;
+                `;
+                button.addEventListener('mouseenter', () => { button.style.opacity = '0.82'; });
+                button.addEventListener('mouseleave', () => {
+                    if (!button.disabled) {
+                        button.style.opacity = '1';
+                    }
+                });
 
                 // Apply disco mode if enabled
                 chrome.storage.local.get(['discoMode'], (result) => {
@@ -475,6 +645,7 @@ const pollCardServerError = async (context, options = {}) => {
 
                 // Додаємо кнопку до обгортки
                 wrapper.appendChild(button);
+                ensureCardLoginStatusNode();
 
                 // Додаємо обробник події для кнопки
                 button.addEventListener('click', async () => {
@@ -507,8 +678,13 @@ const pollCardServerError = async (context, options = {}) => {
                             port: finalServerContext?.port || '',
                             client_id: savedField,
                         };
+                        const requestToken = ++cardLoginRequestToken;
 
                         console.log("Дані для надсилання:", payload);
+                        clearCardLoginStatusTimeout();
+                        setCardLoginButtonState(true);
+                        setCardLoginStatus('sending');
+                        scheduleCardLoginLongWait(requestToken);
 
                         // Надсилаємо POST-запит
                         const response = await fetch('https://planfix-to-syrve.com:8000/send_data/', {
@@ -519,19 +695,40 @@ const pollCardServerError = async (context, options = {}) => {
                             body: JSON.stringify(payload),
                         });
 
+                        if (requestToken !== cardLoginRequestToken) {
+                            return;
+                        }
+
                         if (response.ok) {
                             console.log(await response.json(), response.status);
                             console.log("Дані успішно надіслано.");
-                            await pollCardServerError(finalServerContext || serverContext);
+                            setCardLoginStatus('waiting');
+                            const hasError = await pollCardServerError(finalServerContext || serverContext);
+
+                            if (requestToken !== cardLoginRequestToken) {
+                                return;
+                            }
+
+                            clearCardLoginStatusTimeout();
+                            setCardLoginButtonState(false);
+
+                            if (hasError) {
+                                setCardLoginStatus('idle');
+                                return;
+                            }
+
+                            setCardLoginStatus('success');
                         } else {
                             console.error("Помилка при надсиланні:", response.status, response.statusText);
                             await pollCardServerError(finalServerContext || serverContext, {
                                 fallbackMessage: `Не вдалося виконати запит до сервера ${(finalServerContext || serverContext).server}${(finalServerContext || serverContext).port ? `:${(finalServerContext || serverContext).port}` : ''}. Код відповіді: ${response.status}.`
                             });
+                            resetCardLoginStatus();
                         }
                     } catch (error) {
                         console.error("Помилка мережі:", error);
                         setCardErrorMessage(`Помилка підключення до сервера ${(finalServerContext || serverContext).server}${(finalServerContext || serverContext).port ? `:${(finalServerContext || serverContext).port}` : ''}. Перевірте адресу, порт та доступність сервера.`);
+                        resetCardLoginStatus();
                     }
                 });
 
@@ -802,7 +999,9 @@ const pollCardServerError = async (context, options = {}) => {
             document.getElementById(BUTTONS_ID).remove();
             document.getElementById(CARD_PERIOD_ID)?.remove();
             document.getElementById(CARD_ERROR_ID)?.remove();
+            document.getElementById(CARD_LOGIN_STATUS_ID)?.remove();
             invalidateCardErrorPolling();
+            invalidateCardLoginRequest();
             activePeriodRequestId = null;
         }
     });

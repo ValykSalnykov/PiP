@@ -1070,6 +1070,20 @@ const pollCardServerError = async (context, options = {}) => {
         return (link ? link.textContent : td.textContent).trim();
     };
 
+    const resolveServerEntry = (rawServer, rawPort) => {
+        if (!rawServer) return null;
+
+        const extractedServer = extractDaoCloudAddress(rawServer);
+        if (!extractedServer) return null;
+
+        const serverContext = resolveCardServerContext(extractedServer, rawPort);
+        if (!serverContext) return null;
+
+        return serverContext.port
+            ? `${serverContext.server}:${serverContext.port}`
+            : serverContext.server;
+    };
+
     // Зібрати унікальні пари server:port для групи
     const collectServers = (colClass, groupValue) => {
         const rows = document.querySelectorAll('tr.handbook-data-item');
@@ -1079,23 +1093,33 @@ const pollCardServerError = async (context, options = {}) => {
         const portClass   = findColClass(HEADER_PORT);
         rows.forEach(row => {
             if (cellText(row, colClass) !== groupValue) return;
-            const rawServer = cellText(row, serverClass);
-            if (!rawServer) return;
-
-            const extractedServer = extractDaoCloudAddress(rawServer);
-            if (!extractedServer) return;
-
-            const serverContext = resolveCardServerContext(
-                extractedServer,
+            const entry = resolveServerEntry(
+                cellText(row, serverClass),
                 cellText(row, portClass)
             );
-            if (!serverContext) return;
-
-            const entry = serverContext.port
-                ? `${serverContext.server}:${serverContext.port}`
-                : serverContext.server;
+            if (!entry) return;
             if (!seen.has(entry)) { seen.add(entry); result.push(entry); }
         });
+        return result;
+    };
+
+    const collectAllServersOnPage = () => {
+        const rows = document.querySelectorAll('tr.handbook-data-item');
+        const seen = new Set();
+        const result = [];
+        const serverClass = findColClass(HEADER_SERVER);
+        const portClass   = findColClass(HEADER_PORT);
+
+        rows.forEach((row) => {
+            const entry = resolveServerEntry(
+                cellText(row, serverClass),
+                cellText(row, portClass)
+            );
+            if (!entry || seen.has(entry)) return;
+            seen.add(entry);
+            result.push(entry);
+        });
+
         return result;
     };
 
@@ -1144,8 +1168,7 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
-    const makeGroupRow = (label, value, colClass) => {
-        if (!value) return null;
+    const makeActionRow = (label, value, onOpen) => {
         const row = document.createElement('div');
         row.style.cssText = 'display: flex; align-items: center; gap: 6px;';
 
@@ -1157,17 +1180,33 @@ const pollCardServerError = async (context, options = {}) => {
         val.textContent = value;
         val.style.cssText = 'font-weight: 600; color: #111827; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
 
-        const openUrl = (action) => {
+        row.appendChild(lbl);
+        row.appendChild(val);
+        row.appendChild(makeBtn('✓ Перевірити', '#059669', () => onOpen('check')));
+        row.appendChild(makeBtn('↻ Оновити',    '#d97706', () => onOpen('update')));
+        return row;
+    };
+
+    const makeGroupRow = (label, value, colClass) => {
+        if (!value) return null;
+
+        return makeActionRow(label, value, (action) => {
             const servers = collectServers(colClass, value);
             if (!servers.length) { alert(`Не знайдено серверів для: ${value}`); return; }
             window.open(`${LICENSE_MANAGER_BASE}?servers=${encodeURIComponent(servers.join(','))}&action=${action}`, '_blank');
-        };
+        });
+    };
 
-        row.appendChild(lbl);
-        row.appendChild(val);
-        row.appendChild(makeBtn('✓ Перевірити', '#059669', () => openUrl('check')));
-        row.appendChild(makeBtn('↻ Оновити',    '#d97706', () => openUrl('update')));
-        return row;
+    const makeAllServersRow = () => {
+        return makeActionRow('Сервери', 'Усі на сторінці', (action) => {
+            const servers = collectAllServersOnPage();
+            if (!servers.length) {
+                alert('Не знайдено серверів на поточній сторінці.');
+                return;
+            }
+
+            window.open(`${LICENSE_MANAGER_BASE}?servers=${encodeURIComponent(servers.join(','))}&action=${action}`, '_blank');
+        });
     };
 
     const HOVER_HIDE_DELAY = 1000;
@@ -1195,8 +1234,8 @@ const pollCardServerError = async (context, options = {}) => {
         panel.style.right = 'auto';
     };
 
-    const showPanel = (td, colClass, label, value) => {
-        if (activeHoverCell && activeHoverCell !== td && panel.style.display !== 'none') {
+    const showPanel = (anchorElement, renderRow) => {
+        if (activeHoverCell && activeHoverCell !== anchorElement && panel.style.display !== 'none') {
             return;
         }
 
@@ -1204,19 +1243,21 @@ const pollCardServerError = async (context, options = {}) => {
         hideTimer = null;
         clearTimeout(hideAnimationTimer);
         hideAnimationTimer = null;
-        if (!value) return;
 
-        activeHoverCell = td;
+        activeHoverCell = anchorElement;
 
         panel.innerHTML = '';
-        const groupRow = makeGroupRow(label, value, colClass);
-        if (!groupRow) return;
-        panel.appendChild(groupRow);
+        const row = renderRow();
+        if (!row) {
+            activeHoverCell = null;
+            return;
+        }
+        panel.appendChild(row);
 
         panel.style.display = 'flex';
         // Позиціонуємо після display:flex, щоб offsetWidth був актуальним
         requestAnimationFrame(() => {
-            positionBelow(td);
+            positionBelow(anchorElement);
             panel.style.opacity = '1';
         });
     };
@@ -1261,14 +1302,34 @@ const pollCardServerError = async (context, options = {}) => {
 
                 td.addEventListener('mouseenter', () => {
                     const value = cellText(row, colClass);
-                    showPanel(td, colClass, label, value);
+                    showPanel(td, () => makeGroupRow(label, value, colClass));
                 });
                 td.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
             });
         });
     };
 
-    const observer = new MutationObserver(attachCellHover);
+    const attachServerHeaderHover = () => {
+        const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${COLUMN_IDS[HEADER_SERVER]}"]`)
+            || document.querySelector(`[data-columnid="${COLUMN_IDS[HEADER_SERVER]}"]`);
+        const hoverTarget = headerTrigger?.closest('td, th, .td-head') || headerTrigger;
+        if (!hoverTarget || hoverTarget.dataset.serverHoverAttached) return;
+
+        hoverTarget.dataset.serverHoverAttached = '1';
+        hoverTarget.style.cursor = 'default';
+
+        hoverTarget.addEventListener('mouseenter', () => {
+            showPanel(hoverTarget, () => makeAllServersRow());
+        });
+        hoverTarget.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
+    };
+
+    const attachHoverTargets = () => {
+        attachCellHover();
+        attachServerHeaderHover();
+    };
+
+    const observer = new MutationObserver(attachHoverTargets);
     observer.observe(document.body, { childList: true, subtree: true });
-    attachCellHover();
+    attachHoverTargets();
 })();

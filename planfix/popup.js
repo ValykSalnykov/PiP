@@ -63,11 +63,16 @@ const shouldUseDefaultSecurePort = (server) => {
 };
 
 const resolvePort = (server, port) => {
+  const explicitPort = (port || "").trim();
+  if (explicitPort) {
+    return explicitPort;
+  }
+
   if (shouldUseDefaultSecurePort(server)) {
     return "443";
   }
 
-  return (port || "").trim();
+  return "";
 };
 
 const getCurrentServerContext = () => {
@@ -114,11 +119,10 @@ const wait = (delay) => new Promise((resolve) => {
 
 const applyServerFieldState = () => {
   const value = normalizeServer(serverField.value);
-  if (value && shouldUseDefaultSecurePort(value)) {
+  const currentPort = (portField.value || "").trim();
+
+  if (value && shouldUseDefaultSecurePort(value) && !currentPort) {
     portField.value = "443";
-    portField.disabled = true;
-  } else {
-    portField.disabled = false;
   }
 };
 
@@ -297,12 +301,7 @@ saveButton.addEventListener("click", () => {
 // Автовибір порту
 serverField.addEventListener("input", () => {
   invalidateInlineErrorPolling();
-  const previousPort = portField.value;
   applyServerFieldState();
-
-  if (!shouldUseDefaultSecurePort(serverField.value) && portField.disabled === false && previousPort === "443") {
-    portField.value = "";
-  }
 
   clearInlineServerError();
   persistCurrentServerContext();

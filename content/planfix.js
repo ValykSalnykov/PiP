@@ -216,9 +216,12 @@ const resolveCardServerContext = (server, port) => {
         return null;
     }
 
-    const resolvedPort = SECURE_DEFAULT_PORT_DOMAINS.some((domain) => normalizedServer.endsWith(domain))
-        ? '443'
-        : (port || '').trim();
+    const explicitPort = (port || '').trim();
+    const resolvedPort = explicitPort || (
+        SECURE_DEFAULT_PORT_DOMAINS.some((domain) => normalizedServer.endsWith(domain))
+            ? '443'
+            : ''
+    );
 
     return {
         server: normalizedServer,
@@ -832,7 +835,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createRestoBtn = () => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
-        btn.textContent = 'Відкрити вебморду';
+        btn.textContent = ' Вебморда';
         btn.style.cssText = `
             margin-left: 8px;
             cursor: pointer;
@@ -968,8 +971,8 @@ const pollCardServerError = async (context, options = {}) => {
             gap: 6px;
             padding: 6px 0 2px 0;
         `;
-        container.appendChild(createLicenseBtn("✓ Перевірити ліцензії", "check", "#059669"));
-        container.appendChild(createLicenseBtn("↻ Оновити ліцензії", "update", "#d97706"));
+        container.appendChild(createLicenseBtn("✓ Перевірити", "check", "#059669"));
+        container.appendChild(createLicenseBtn("↻ Оновити", "update", "#d97706"));
         container.appendChild(createRestoBtn());
         container.appendChild(createDevicesBtn());
         container.appendChild(createPeriodBtn());
@@ -1076,10 +1079,21 @@ const pollCardServerError = async (context, options = {}) => {
         const portClass   = findColClass(HEADER_PORT);
         rows.forEach(row => {
             if (cellText(row, colClass) !== groupValue) return;
-            const server = cellText(row, serverClass);
-            if (!server) return;
-            const port = cellText(row, portClass) || '443';
-            const entry = `${server}:${port}`;
+            const rawServer = cellText(row, serverClass);
+            if (!rawServer) return;
+
+            const extractedServer = extractDaoCloudAddress(rawServer);
+            if (!extractedServer) return;
+
+            const serverContext = resolveCardServerContext(
+                extractedServer,
+                cellText(row, portClass)
+            );
+            if (!serverContext) return;
+
+            const entry = serverContext.port
+                ? `${serverContext.server}:${serverContext.port}`
+                : serverContext.server;
             if (!seen.has(entry)) { seen.add(entry); result.push(entry); }
         });
         return result;

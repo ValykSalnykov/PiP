@@ -30,6 +30,7 @@ const TAB_STATE = new Map();
 const HEALTH_PERIOD_REQUESTS = new Map();
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
+const SERVER_AVAILABILITY_TIMEOUT_MS = 4000;
 
 chrome.runtime.onInstalled.addListener(() => {
   log.info('Extension installed or updated');
@@ -159,6 +160,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.action === 'PROBE_SERVER_AVAILABILITY') {
+    if (!message.server) {
+      sendResponse({ ok: false, error: 'Missing server' });
+      return false;
+    }
+
+    probeServerAvailability({
+      server: message.server,
+      port: message.port
+    })
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to probe server availability' }));
+
+    return true;
+  }
+
   if (message?.action === 'SYRVE_HEALTH_PERIOD_RESULT') {
     const serviceTabId = sender.tab?.id;
     if (serviceTabId === undefined) return false;
@@ -234,6 +251,42 @@ async function openHealthPeriodTab({ requesterTabId, server, requestId }) {
   });
 
   return createdTab.id;
+}
+
+async function probeServerAvailability({ server, port }) {
+  const portSegment = port ? `:${port}` : '';
+  const url = `https://${server}${portSegment}/resto`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SERVER_AVAILABILITY_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'follow',
+      signal: controller.signal
+    });
+
+    const reachable = response.ok || response.status === 401 || response.status === 403;
+    return {
+      reachable,
+      status: response.status,
+      url
+    };
+  } catch (error) {
+    const isAbortError = error?.name === 'AbortError';
+    return {
+      reachable: false,
+      status: null,
+      url,
+      error: isAbortError
+        ? `Не вдалося дочекатися відповіді від ${url}.`
+        : `Не вдалося підключитися до ${url}.`
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function finalizeHealthPeriodRequest(serviceTabId, result) {

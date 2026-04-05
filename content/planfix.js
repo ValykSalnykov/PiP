@@ -184,14 +184,18 @@ const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
+const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
+const CARD_SERVER_AVAILABILITY_CHECK_DELAY_MS = 450;
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it', 'daocloud.fun'];
 
 let cardErrorPollToken = 0;
 let activePeriodRequestId = null;
 let cardLoginStatusTimeoutId = 0;
 let cardLoginRequestToken = 0;
+let cardServerAvailabilityCheckToken = 0;
+let cardServerAvailabilityCheckTimerId = 0;
 
 const normalizeServerHost = (value) => {
     const rawValue = (value || '').trim();
@@ -229,13 +233,211 @@ const resolveCardServerContext = (server, port) => {
     };
 };
 
+const getCardServerAvailabilityUrl = (context) => {
+    if (!context?.server) {
+        return '';
+    }
+
+    const portSegment = context.port ? `:${context.port}` : '';
+    return `https://${context.server}${portSegment}/resto`;
+};
+
 const invalidateCardErrorPolling = () => {
     cardErrorPollToken += 1;
+};
+
+const getCardServerAvailabilityNode = (targetParent) => {
+    if (!targetParent) {
+        return null;
+    }
+
+    return [...targetParent.children].find((child) => child.getAttribute(CARD_SERVER_AVAILABILITY_ATTR) === 'true') || null;
+};
+
+const ensureCardServerInlineContainer = (field72ValueElement) => {
+    if (!field72ValueElement) {
+        return null;
+    }
+
+    const currentParent = field72ValueElement.parentElement;
+    if (!currentParent) {
+        return null;
+    }
+
+    if (currentParent.dataset.daoServerInline === 'true') {
+        return currentParent;
+    }
+
+    const inlineContainer = document.createElement('span');
+    inlineContainer.dataset.daoServerInline = 'true';
+    inlineContainer.style.cssText = `
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    `;
+
+    currentParent.insertBefore(inlineContainer, field72ValueElement);
+    inlineContainer.appendChild(field72ValueElement);
+    return inlineContainer;
+};
+
+const ensureCardServerAvailabilityNode = (field72ValueElement) => {
+    if (!field72ValueElement) {
+        return null;
+    }
+
+    const inlineContainer = ensureCardServerInlineContainer(field72ValueElement);
+    const targetParent = inlineContainer || field72ValueElement.parentElement;
+    let statusNode = getCardServerAvailabilityNode(targetParent);
+
+    if (!targetParent) {
+        return statusNode;
+    }
+
+    if (!statusNode) {
+        statusNode = document.createElement('span');
+        statusNode.setAttribute(CARD_SERVER_AVAILABILITY_ATTR, 'true');
+        statusNode.setAttribute('aria-hidden', 'true');
+        statusNode.style.cssText = `
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            display: inline-block;
+            flex: 0 0 10px;
+            background: #9ca3af;
+            transition: background 0.18s ease, transform 0.18s ease;
+        `;
+    }
+
+    if (statusNode.parentElement !== targetParent || statusNode.nextElementSibling !== field72ValueElement) {
+        targetParent.insertBefore(statusNode, field72ValueElement);
+    }
+
+    return statusNode;
+};
+
+const setCardServerAvailabilityState = (state, message = '', field72ValueElement = document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text')) => {
+    const statusNode = ensureCardServerAvailabilityNode(field72ValueElement);
+    if (!statusNode) {
+        return;
+    }
+
+    const stateMap = {
+        idle: {
+            background: '#9ca3af',
+            transform: 'scale(1)'
+        },
+        checking: {
+            background: '#f59e0b',
+            transform: 'scale(1.08)'
+        },
+        online: {
+            background: '#16a34a',
+            transform: 'scale(1)'
+        },
+        offline: {
+            background: '#dc2626',
+            transform: 'scale(1)'
+        }
+    };
+
+    const config = stateMap[state] || stateMap.idle;
+    statusNode.style.background = config.background;
+    statusNode.style.transform = config.transform;
+    statusNode.title = message || '';
+};
+
+const invalidateCardServerAvailabilityCheck = () => {
+    cardServerAvailabilityCheckToken += 1;
+
+    if (cardServerAvailabilityCheckTimerId) {
+        clearTimeout(cardServerAvailabilityCheckTimerId);
+        cardServerAvailabilityCheckTimerId = 0;
+    }
 };
 
 const wait = (delay) => new Promise((resolve) => {
     setTimeout(resolve, delay);
 });
+
+const probeCardServerAvailability = async (context, field72ValueElement, requestToken) => {
+    const url = getCardServerAvailabilityUrl(context);
+    if (!url) {
+        setCardServerAvailabilityState('idle', '', field72ValueElement);
+        return false;
+    }
+
+    setCardServerAvailabilityState('checking', `Перевірка ${url}`, field72ValueElement);
+
+    try {
+        const response = await new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({
+                action: 'PROBE_SERVER_AVAILABILITY',
+                server: context.server,
+                port: context.port
+            }, (result) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                    return;
+                }
+
+                resolve(result);
+            });
+        });
+
+        if (requestToken !== cardServerAvailabilityCheckToken) {
+            return false;
+        }
+
+        if (!response?.ok) {
+            throw new Error(response?.error || `Не вдалося перевірити ${url}.`);
+        }
+
+        const isReachable = response.reachable === true;
+        setCardServerAvailabilityState(
+            isReachable ? 'online' : 'offline',
+            response.error || `${url} відповідає зі статусом ${response.status}.`,
+            field72ValueElement
+        );
+        return isReachable;
+    } catch (error) {
+        if (requestToken !== cardServerAvailabilityCheckToken) {
+            return false;
+        }
+
+        setCardServerAvailabilityState(
+            'offline',
+            error?.message || `Не вдалося підключитися до ${url}.`,
+            field72ValueElement
+        );
+        return false;
+    }
+};
+
+const scheduleCardServerAvailabilityCheck = (context, field72ValueElement) => {
+    invalidateCardServerAvailabilityCheck();
+
+    if (!field72ValueElement) {
+        return;
+    }
+
+    if (!context?.server) {
+        setCardServerAvailabilityState('idle', '', field72ValueElement);
+        return;
+    }
+
+    const requestToken = cardServerAvailabilityCheckToken;
+    cardServerAvailabilityCheckTimerId = window.setTimeout(async () => {
+        cardServerAvailabilityCheckTimerId = 0;
+
+        if (requestToken !== cardServerAvailabilityCheckToken) {
+            return;
+        }
+
+        await probeCardServerAvailability(context, field72ValueElement, requestToken);
+    }, CARD_SERVER_AVAILABILITY_CHECK_DELAY_MS);
+};
 
 const ensureCardErrorNode = () => {
     let errorNode = document.getElementById(CARD_ERROR_ID);
@@ -606,9 +808,16 @@ const pollCardServerError = async (context, options = {}) => {
                 wrapper.style.alignItems = "center";
                 wrapper.style.gap = "10px";
 
+                const serverInfo = document.createElement('span');
+                serverInfo.style.display = 'inline-flex';
+                serverInfo.style.alignItems = 'center';
+                serverInfo.style.gap = '6px';
+                serverInfo.style.minWidth = '0';
+
                 // Переміщуємо текстовий елемент у нову обгортку
                 field72ValueElement.parentElement.insertBefore(wrapper, field72ValueElement);
-                wrapper.appendChild(field72ValueElement);
+                wrapper.appendChild(serverInfo);
+                serverInfo.appendChild(field72ValueElement);
 
                 // Створюємо кнопку
                 const button = document.createElement('button');
@@ -735,19 +944,6 @@ const pollCardServerError = async (context, options = {}) => {
                     }
                 });
 
-                const initialPortElement = document.querySelector(
-                    "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(7) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
-                );
-                const initialContext = resolveCardServerContext(
-                    extractDaoCloudAddress(field72ValueElement.textContent.trim()),
-                    initialPortElement ? initialPortElement.textContent.trim() : ''
-                );
-
-                if (initialContext) {
-                    pollCardServerError(initialContext).catch((error) => {
-                        console.error('Не вдалося оновити помилку для картки:', error);
-                    });
-                }
             }
         };
 
@@ -780,8 +976,13 @@ const pollCardServerError = async (context, options = {}) => {
     const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
     const BUTTONS_ID = CARD_BUTTONS_ID;
 
-    const getServerData = (showAlert = true) => {
-        const serverField = document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
+    const getCardScopeRoot = (element) => (
+        element?.closest('.g-popup-win-scroll-content, .page-layout-block.handbook-card-container, .object-edit-win-target, .object-edit-win-location-field')
+        || document
+    );
+
+    const getServerData = (scopeRoot = document, showAlert = true) => {
+        const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
         const rawServer = serverField ? serverField.textContent.trim() : '';
         const extractedServer = extractDaoCloudAddress(rawServer);
 
@@ -792,13 +993,13 @@ const pollCardServerError = async (context, options = {}) => {
             return null;
         }
 
-        const portField = document.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
+        const portField = scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
         const port = portField ? portField.textContent.trim() : '';
 
         return resolveCardServerContext(extractedServer, port);
     };
 
-    const createLicenseBtn = (label, action, color) => {
+    const createLicenseBtn = (label, action, color, scopeRoot) => {
         const btn = document.createElement('button');
         btn.textContent = label;
         btn.style.cssText = `
@@ -817,7 +1018,7 @@ const pollCardServerError = async (context, options = {}) => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = "0.82"; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = "1"; });
         btn.addEventListener('click', () => {
-            const serverData = getServerData(true);
+            const serverData = getServerData(scopeRoot, true);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -832,7 +1033,7 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
-    const createRestoBtn = () => {
+    const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
         btn.textContent = ' Вебморда';
@@ -852,7 +1053,7 @@ const pollCardServerError = async (context, options = {}) => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', async () => {
-            const serverData = getServerData(true);
+            const serverData = getServerData(scopeRoot, true);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -873,7 +1074,7 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
-    const createDevicesBtn = () => {
+    const createDevicesBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-connections-button';
         btn.textContent = 'Пристрої';
@@ -893,7 +1094,7 @@ const pollCardServerError = async (context, options = {}) => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', () => {
-            const serverData = getServerData(true);
+            const serverData = getServerData(scopeRoot, true);
             if (!serverData) return;
 
             window.open(`https://${serverData.server}/resto/service/monitoring/connections.jsp`, '_blank');
@@ -901,7 +1102,7 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
-    const createPeriodBtn = () => {
+    const createPeriodBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'get-period-button';
         btn.textContent = 'Період';
@@ -921,7 +1122,7 @@ const pollCardServerError = async (context, options = {}) => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', () => {
-            const serverData = getServerData(true);
+            const serverData = getServerData(scopeRoot, true);
             if (!serverData) return;
 
             if (activePeriodRequestId) {
@@ -953,58 +1154,77 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
-    const injectPanelButtons = () => {
-        if (document.getElementById(BUTTONS_ID)) return;
-
-        const serverFieldTarget = document.querySelector('.field-target[f-id="72"]');
+    const injectPanelButtons = (serverFieldTarget) => {
         if (!serverFieldTarget) return;
+
+        const scopeRoot = getCardScopeRoot(serverFieldTarget);
 
         const wrapperBox = serverFieldTarget.querySelector('.object-edit-field-bottom-panel-rc__wrapper-box');
         if (!wrapperBox) return;
 
-        const container = document.createElement('div');
-        container.id = BUTTONS_ID;
-        container.style.cssText = `
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 6px;
-            padding: 6px 0 2px 0;
-        `;
-        container.appendChild(createLicenseBtn("✓ Перевірити", "check", "#059669"));
-        container.appendChild(createLicenseBtn("↻ Оновити", "update", "#d97706"));
-        container.appendChild(createRestoBtn());
-        container.appendChild(createDevicesBtn());
-        container.appendChild(createPeriodBtn());
+        const serverValueElement = serverFieldTarget.querySelector('.ObjectEditFieldBase__view__value__text');
+        if (serverValueElement) {
+            ensureCardServerAvailabilityNode(serverValueElement);
+        }
 
-        wrapperBox.after(container);
+        let container = scopeRoot.querySelector(`#${BUTTONS_ID}`);
+        if (!container) {
+            container = document.createElement('div');
+            container.id = BUTTONS_ID;
+            container.style.cssText = `
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px;
+                padding: 6px 0 2px 0;
+            `;
+            container.appendChild(createLicenseBtn("✓ Перевірити", "check", "#059669", scopeRoot));
+            container.appendChild(createLicenseBtn("↻ Оновити", "update", "#d97706", scopeRoot));
+            container.appendChild(createRestoBtn(scopeRoot));
+            container.appendChild(createDevicesBtn(scopeRoot));
+            container.appendChild(createPeriodBtn(scopeRoot));
+
+            wrapperBox.after(container);
+        } else if (container.previousElementSibling !== wrapperBox) {
+            wrapperBox.after(container);
+        }
+
         ensureCardPeriodNode();
         ensureCardErrorNode();
 
-        const serverData = getServerData(false);
+        const serverData = getServerData(scopeRoot, false);
         if (serverData) {
+            if (serverValueElement) {
+                scheduleCardServerAvailabilityCheck(serverData, serverValueElement);
+            }
             pollCardServerError(serverData).catch((error) => {
                 console.error('Не вдалося оновити помилку при ініціалізації картки:', error);
             });
         } else {
             clearCardPeriodMessage();
             clearCardErrorMessage();
+            if (serverValueElement) {
+                setCardServerAvailabilityState('idle', '', serverValueElement);
+            }
         }
     };
 
     // Використовуємо MutationObserver для очікування появи елемента
     const panelObserver = new MutationObserver(() => {
-        if (document.querySelector('.field-target[f-id="72"]')) {
-            injectPanelButtons();
-        }
+        document.querySelectorAll('.field-target[f-id="72"]').forEach((serverFieldTarget) => {
+            injectPanelButtons(serverFieldTarget);
+        });
+
         // Прибираємо кнопки при зміні сторінки, щоб уникнути дублювання
         if (!document.querySelector('.field-target[f-id="72"]') && document.getElementById(BUTTONS_ID)) {
-            document.getElementById(BUTTONS_ID).remove();
-            document.getElementById(CARD_PERIOD_ID)?.remove();
-            document.getElementById(CARD_ERROR_ID)?.remove();
-            document.getElementById(CARD_LOGIN_STATUS_ID)?.remove();
+            document.querySelectorAll(`#${BUTTONS_ID}`).forEach((node) => node.remove());
+            document.querySelectorAll(`#${CARD_PERIOD_ID}`).forEach((node) => node.remove());
+            document.querySelectorAll(`#${CARD_ERROR_ID}`).forEach((node) => node.remove());
+            document.querySelectorAll(`#${CARD_LOGIN_STATUS_ID}`).forEach((node) => node.remove());
+            document.querySelectorAll(`[${CARD_SERVER_AVAILABILITY_ATTR}="true"]`).forEach((node) => node.remove());
             invalidateCardErrorPolling();
             invalidateCardLoginRequest();
+            invalidateCardServerAvailabilityCheck();
             activePeriodRequestId = null;
         }
     });
@@ -1012,7 +1232,9 @@ const pollCardServerError = async (context, options = {}) => {
     panelObserver.observe(document.body, { childList: true, subtree: true });
 
     // Одразу пробуємо, якщо елемент вже є
-    injectPanelButtons();
+    document.querySelectorAll('.field-target[f-id="72"]').forEach((serverFieldTarget) => {
+        injectPanelButtons(serverFieldTarget);
+    });
 })();
 
 // --- Логіка для сторінки-списку довідника: sticky hover-панель масових дій ---

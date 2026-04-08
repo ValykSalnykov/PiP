@@ -190,7 +190,7 @@ const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
 const CARD_SERVER_AVAILABILITY_CHECK_DELAY_MS = 450;
-const CARD_LICENSE_GROUP_ORDER = ['mobile', 'api', 'pos', 'other'];
+const CARD_LICENSE_GROUP_ORDER = ['pos', 'api', 'mobile', 'other'];
 const CARD_LICENSE_GROUP_LABELS = {
     mobile: 'Мобільні',
     api: 'API',
@@ -612,78 +612,93 @@ const ensureCardLicenseModalStyles = () => {
             align-items: center;
             justify-content: center;
             padding: 24px;
-            background: rgba(15, 23, 42, 0.64);
-            backdrop-filter: blur(3px);
+            background: rgba(8, 11, 18, 0.76);
+            backdrop-filter: blur(8px) saturate(1.02);
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
-            width: min(860px, 100%);
-            max-height: min(84vh, 760px);
+            width: min(980px, 100%);
+            height: min(94vh, 1080px);
+            max-height: min(94vh, 1080px);
+            position: relative;
+            isolation: isolate;
             display: grid;
             grid-template-rows: auto 1fr auto;
-            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-            border-radius: 20px;
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            box-shadow: 0 28px 80px rgba(15, 23, 42, 0.28);
+            background: linear-gradient(180deg, #ffffff 0%, #f4f6f7 100%);
+            border-radius: 22px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            box-shadow: 0 34px 88px rgba(15, 23, 42, 0.32), 0 10px 24px rgba(15, 23, 42, 0.16);
             overflow: hidden;
             color: #0f172a;
             font-family: "Inter", "Segoe UI", Arial, sans-serif;
         }
 
-        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__header {
-            padding: 22px 22px 14px;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
             background:
-                radial-gradient(circle at top left, rgba(79, 70, 229, 0.12), rgba(255, 255, 255, 0) 48%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+                radial-gradient(circle at top left, rgba(148, 163, 184, 0.12), transparent 26%),
+                radial-gradient(circle at 85% 12%, rgba(255, 255, 255, 0.9), transparent 22%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0));
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__header {
+            padding: 0;
+            background: transparent;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title-row {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 16px;
+            display: block;
         }
 
-        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__eyebrow {
-            margin: 0 0 6px;
-            color: #4f46e5;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title-wrap {
+            padding: 12px 14px 0;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title-wrap[hidden] {
+            display: none;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title {
             margin: 0;
-            font-size: 24px;
+            font-size: 18px;
             line-height: 1.2;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__subtitle {
-            margin: 8px 0 0;
+            margin: 4px 0 0;
             color: #475569;
-            font-size: 14px;
+            font-size: 13px;
             line-height: 1.4;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__icon-button,
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__button {
-            border: none;
+            border: 1px solid transparent;
             cursor: pointer;
-            transition: transform 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+            transition: transform 0.15s ease, background 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__icon-button {
-            width: 38px;
-            height: 38px;
+            width: 34px;
+            height: 34px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             border-radius: 999px;
-            background: rgba(148, 163, 184, 0.14);
-            color: #334155;
-            font-size: 20px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(227, 241, 214, 0.72));
+            border-color: rgba(98, 158, 53, 0.16);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 6px 14px rgba(51, 86, 28, 0.08);
+            color: #33561c;
+            font-size: 18px;
             flex: 0 0 auto;
         }
 
@@ -692,28 +707,62 @@ const ensureCardLicenseModalStyles = () => {
             transform: translateY(-1px);
         }
 
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__icon-button:hover {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(219, 238, 202, 0.86));
+            border-color: rgba(98, 158, 53, 0.24);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 10px 18px rgba(51, 86, 28, 0.1);
+        }
+
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__body {
-            padding: 20px 22px;
+            padding: 10px 14px 14px;
             overflow: auto;
             display: grid;
-            gap: 16px;
+            gap: 10px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(241, 245, 249, 0.18));
+            scrollbar-width: thin;
+            scrollbar-color: rgba(100, 116, 139, 0.34) transparent;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__body::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__body::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__body::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.28);
+            border-radius: 999px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__panel {
+            position: relative;
+            overflow: hidden;
             display: grid;
-            gap: 12px;
-            padding: 16px;
-            border-radius: 16px;
-            border: 1px solid rgba(148, 163, 184, 0.18);
-            background: rgba(255, 255, 255, 0.92);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+            gap: 8px;
+            padding: 12px;
+            border-radius: 18px;
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95));
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__panel::before {
+            content: '';
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(148, 163, 184, 0.44), rgba(148, 163, 184, 0));
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-head,
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-head,
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-head {
             display: flex;
-            align-items: flex-start;
+            align-items: center;
             justify-content: space-between;
             gap: 12px;
         }
@@ -722,8 +771,9 @@ const ensureCardLicenseModalStyles = () => {
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-title,
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-title {
             margin: 0;
-            font-size: 18px;
+            font-size: 17px;
             line-height: 1.25;
+            letter-spacing: 0.01em;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-caption,
@@ -738,27 +788,60 @@ const ensureCardLicenseModalStyles = () => {
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__chip {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
+            gap: 5px;
+            padding: 5px 8px;
             border-radius: 999px;
-            font-size: 12px;
+            border: 1px solid transparent;
+            font-size: 11px;
             font-weight: 700;
             white-space: nowrap;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill--success {
-            background: rgba(5, 150, 105, 0.12);
-            color: #047857;
+            background: linear-gradient(180deg, rgba(98, 158, 53, 0.16), rgba(98, 158, 53, 0.1));
+            border-color: rgba(98, 158, 53, 0.16);
+            color: #33561c;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill--warning {
-            background: rgba(217, 119, 6, 0.12);
-            color: #b45309;
+            background: linear-gradient(180deg, rgba(202, 138, 4, 0.16), rgba(202, 138, 4, 0.1));
+            border-color: rgba(202, 138, 4, 0.18);
+            color: #854d0e;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill--error {
-            background: rgba(220, 38, 38, 0.12);
+            background: linear-gradient(180deg, rgba(220, 38, 38, 0.14), rgba(220, 38, 38, 0.1));
+            border-color: rgba(220, 38, 38, 0.16);
             color: #dc2626;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__status-pill {
+            padding: 7px 11px;
+            border-width: 1px;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            box-shadow: 0 10px 18px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__status-pill--success {
+            background: linear-gradient(180deg, #7ac943, #5ea72f);
+            border-color: rgba(154, 230, 116, 0.42);
+            color: #ffffff;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__status-pill--warning {
+            background: linear-gradient(180deg, #f0b74a, #cf8a1f);
+            border-color: rgba(255, 219, 128, 0.38);
+            color: #ffffff;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__status-pill--error {
+            background: linear-gradient(180deg, #ef5b5b, #d53a3a);
+            border-color: rgba(255, 166, 166, 0.36);
+            color: #ffffff;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note,
@@ -766,105 +849,290 @@ const ensureCardLicenseModalStyles = () => {
             border-radius: 14px;
             padding: 12px 14px;
             line-height: 1.5;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note {
-            background: rgba(79, 70, 229, 0.08);
-            color: #4338ca;
-            border: 1px solid rgba(79, 70, 229, 0.12);
+            background: linear-gradient(180deg, rgba(98, 158, 53, 0.1), rgba(98, 158, 53, 0.06));
+            color: #33561c;
+            border: 1px solid rgba(98, 158, 53, 0.14);
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__error-state {
-            background: rgba(220, 38, 38, 0.08);
+            background: linear-gradient(180deg, rgba(220, 38, 38, 0.09), rgba(220, 38, 38, 0.05));
             color: #b91c1c;
             border: 1px solid rgba(220, 38, 38, 0.16);
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badges {
-            display: flex;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 10px;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge {
-            min-width: 120px;
+            min-width: 0;
+            position: relative;
+            overflow: hidden;
             display: grid;
-            gap: 4px;
-            padding: 10px 12px;
-            border-radius: 12px;
-            background: rgba(79, 70, 229, 0.08);
-            border: 1px solid rgba(79, 70, 229, 0.12);
+            gap: 5px;
+            padding: 10px 12px 11px;
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 247, 249, 0.94));
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 8px 16px rgba(15, 23, 42, 0.04);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge::before {
+            content: '';
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 3px;
+            background: linear-gradient(90deg, rgba(71, 85, 105, 0.8), rgba(148, 163, 184, 0.45));
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge-label {
-            color: #6366f1;
-            font-size: 11px;
+            color: #64748b;
+            font-size: 10px;
             font-weight: 700;
-            letter-spacing: 0.06em;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge-value {
             color: #1e293b;
-            font-size: 14px;
-            font-weight: 700;
-            line-height: 1.35;
+            font-size: 13px;
+            font-weight: 800;
+            line-height: 1.32;
             word-break: break-word;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-list {
             display: grid;
-            gap: 12px;
+            gap: 10px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group {
+            --dao-group-accent: #475569;
+            --dao-group-soft: rgba(71, 85, 105, 0.12);
+            --dao-group-border: rgba(71, 85, 105, 0.18);
+            --dao-group-surface: rgba(71, 85, 105, 0.05);
+            --dao-group-item-surface: rgba(71, 85, 105, 0.06);
+            --dao-group-shadow: rgba(71, 85, 105, 0.08);
+            display: grid;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 16px;
+            border: 1px solid var(--dao-group-border);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), var(--dao-group-surface));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group--pos {
+            --dao-group-accent: #4f7f2a;
+            --dao-group-soft: rgba(98, 158, 53, 0.12);
+            --dao-group-border: rgba(98, 158, 53, 0.18);
+            --dao-group-surface: rgba(98, 158, 53, 0.05);
+            --dao-group-item-surface: rgba(98, 158, 53, 0.06);
+            --dao-group-shadow: rgba(53, 86, 28, 0.08);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group--api {
+            --dao-group-accent: #2563eb;
+            --dao-group-soft: rgba(37, 99, 235, 0.12);
+            --dao-group-border: rgba(37, 99, 235, 0.18);
+            --dao-group-surface: rgba(37, 99, 235, 0.05);
+            --dao-group-item-surface: rgba(37, 99, 235, 0.06);
+            --dao-group-shadow: rgba(37, 99, 235, 0.08);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group--mobile {
+            --dao-group-accent: #c97316;
+            --dao-group-soft: rgba(201, 115, 22, 0.12);
+            --dao-group-border: rgba(201, 115, 22, 0.18);
+            --dao-group-surface: rgba(201, 115, 22, 0.05);
+            --dao-group-item-surface: rgba(201, 115, 22, 0.06);
+            --dao-group-shadow: rgba(180, 83, 9, 0.08);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group--other {
+            --dao-group-accent: #475569;
+            --dao-group-soft: rgba(71, 85, 105, 0.12);
+            --dao-group-border: rgba(71, 85, 105, 0.18);
+            --dao-group-surface: rgba(71, 85, 105, 0.05);
+            --dao-group-item-surface: rgba(71, 85, 105, 0.06);
+            --dao-group-shadow: rgba(71, 85, 105, 0.08);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-head {
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--dao-group-border);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-title {
+            color: var(--dao-group-accent);
+            font-size: 15px;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-list {
             display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 8px;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-item {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            background: rgba(248, 250, 252, 0.95);
-            border: 1px solid rgba(226, 232, 240, 0.95);
+            position: relative;
+            overflow: hidden;
+            display: grid;
+            gap: 8px;
+            align-content: start;
+            min-height: 0;
+            padding: 10px 10px 11px;
+            border-radius: 16px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), var(--dao-group-item-surface));
+            border: 1px solid var(--dao-group-border);
+            box-shadow: 0 10px 20px var(--dao-group-shadow);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-item::before {
+            content: '';
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 3px;
+            background: var(--dao-group-accent);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-item:hover {
+            transform: translateY(-1px);
+            border-color: var(--dao-group-border);
+            box-shadow: 0 14px 24px var(--dao-group-shadow);
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-main {
             min-width: 0;
             display: grid;
-            gap: 4px;
+            gap: 3px;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-name {
             margin: 0;
-            color: #0f172a;
-            font-size: 15px;
-            font-weight: 700;
-            line-height: 1.35;
+            color: #10220a;
+            font-size: 14px;
+            font-weight: 800;
+            line-height: 1.25;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-subtitle {
             margin: 0;
-            color: #64748b;
-            font-size: 12px;
-            line-height: 1.45;
+            color: #607068;
+            font-size: 11px;
+            line-height: 1.3;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-meta {
             display: flex;
             flex-wrap: wrap;
-            justify-content: flex-end;
-            gap: 8px;
-            flex: 0 0 auto;
+            justify-content: flex-start;
+            gap: 6px;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__chip {
-            background: rgba(148, 163, 184, 0.14);
+            background: linear-gradient(180deg, rgba(148, 163, 184, 0.14), rgba(148, 163, 184, 0.08));
+            border-color: rgba(148, 163, 184, 0.16);
             color: #334155;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group .dao-license-modal__chip {
+            background: linear-gradient(180deg, var(--dao-group-soft), var(--dao-group-item-surface));
+            border-color: var(--dao-group-border);
+            color: var(--dao-group-accent);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group .dao-license-modal__chip--count {
+            padding: 6px 10px;
+            background: var(--dao-group-accent);
+            border-color: var(--dao-group-accent);
+            color: #ffffff;
+            font-weight: 800;
+            box-shadow: 0 8px 16px var(--dao-group-shadow);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group .dao-license-modal__chip--date,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group .dao-license-modal__chip--permanent {
+            padding: 6px 10px;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            border-width: 1px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group .dao-license-modal__chip--date {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), var(--dao-group-soft));
+            border-color: var(--dao-group-border);
+            color: var(--dao-group-accent);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group .dao-license-modal__chip--permanent {
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.94));
+            border-color: rgba(255, 255, 255, 0.08);
+            color: #f8fafc;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar {
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.94));
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 42%);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-info {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-label {
+            margin: 0;
+            color: rgba(226, 232, 240, 0.72);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-value {
+            display: inline-flex;
+            align-items: center;
+            margin: 0;
+            padding: 7px 10px;
+            border-radius: 12px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.08));
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 800;
+            line-height: 1.35;
+            letter-spacing: 0.01em;
+            word-break: break-word;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__state {
@@ -875,15 +1143,17 @@ const ensureCardLicenseModalStyles = () => {
             width: 36px;
             height: 36px;
             border-radius: 999px;
-            border: 3px solid rgba(79, 70, 229, 0.18);
-            border-top-color: #4f46e5;
+            border: 3px solid rgba(98, 158, 53, 0.18);
+            border-top-color: #629e35;
+            box-shadow: 0 0 0 4px rgba(98, 158, 53, 0.06);
             animation: dao-license-modal-spin 0.9s linear infinite;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__empty-state {
             padding: 14px;
             border-radius: 14px;
-            background: rgba(148, 163, 184, 0.1);
+            background: linear-gradient(180deg, rgba(148, 163, 184, 0.1), rgba(148, 163, 184, 0.06));
+            border: 1px solid rgba(148, 163, 184, 0.12);
             color: #475569;
             line-height: 1.5;
         }
@@ -891,16 +1161,25 @@ const ensureCardLicenseModalStyles = () => {
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__footer {
             display: flex;
             justify-content: flex-end;
-            padding: 0 22px 22px;
+            padding: 0 14px 14px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(247, 248, 250, 0.92));
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__button {
-            padding: 10px 16px;
+            padding: 8px 14px;
             border-radius: 12px;
-            background: rgba(79, 70, 229, 0.12);
-            color: #4338ca;
-            font-size: 14px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 245, 249, 0.94));
+            border-color: rgba(148, 163, 184, 0.18);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 8px 16px rgba(15, 23, 42, 0.06);
+            color: #334155;
+            font-size: 13px;
             font-weight: 700;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__button:hover {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(236, 242, 247, 0.96));
+            border-color: rgba(100, 116, 139, 0.22);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86), 0 12px 20px rgba(15, 23, 42, 0.08);
         }
 
         @keyframes dao-license-modal-spin {
@@ -915,7 +1194,8 @@ const ensureCardLicenseModalStyles = () => {
 
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
                 width: 100%;
-                max-height: 88vh;
+                height: 94vh;
+                max-height: 94vh;
             }
 
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__header,
@@ -925,10 +1205,16 @@ const ensureCardLicenseModalStyles = () => {
                 padding-right: 16px;
             }
 
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badges,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-list {
+                grid-template-columns: 1fr;
+            }
+
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-item,
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-head,
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-head,
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-head,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar,
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title-row {
                 flex-direction: column;
             }
@@ -960,7 +1246,26 @@ const createCardLicenseModalBadge = (label, value) => {
     return badge;
 };
 
-const createCardLicenseModalChip = (text) => createCardLicenseModalNode('span', 'dao-license-modal__chip', text);
+const createCardLicenseModalChip = (text, modifier = '') => {
+    const className = ['dao-license-modal__chip', modifier].filter(Boolean).join(' ');
+    return createCardLicenseModalNode('span', className, text);
+};
+
+const formatCardLicenseValidityLabel = (value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) {
+        return '';
+    }
+
+    return normalizedValue.toLowerCase().includes('перманент')
+        ? 'ПЕРМАНЕНТНО'
+        : `До ${normalizedValue}`;
+};
+
+const formatCardLicenseServerStatus = (status) => {
+    const tone = resolveCardLicenseStatusTone(status);
+    return tone === 'success' ? 'OK' : 'Не OK';
+};
 
 const resolveCardLicenseStatusTone = (status) => {
     const normalizedStatus = String(status || '').trim().toLowerCase();
@@ -992,15 +1297,13 @@ const ensureCardLicenseModalShell = () => {
         modal = document.createElement('div');
         modal.id = CARD_LICENSE_MODAL_ID;
         modal.innerHTML = `
-            <div class="dao-license-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="dao-license-modal-title">
+            <div class="dao-license-modal__dialog" role="dialog" aria-modal="true" aria-label="Ліцензії Syrve">
                 <div class="dao-license-modal__header">
                     <div class="dao-license-modal__title-row">
-                        <div>
-                            <p class="dao-license-modal__eyebrow">Syrve license check</p>
+                        <div class="dao-license-modal__title-wrap" data-role="title-wrap" hidden>
                             <h2 id="dao-license-modal-title" class="dao-license-modal__title" data-role="title"></h2>
                             <p class="dao-license-modal__subtitle" data-role="subtitle"></p>
                         </div>
-                        <button type="button" class="dao-license-modal__icon-button" data-role="close" aria-label="Закрити">×</button>
                     </div>
                 </div>
                 <div class="dao-license-modal__body" data-role="body"></div>
@@ -1027,6 +1330,7 @@ const ensureCardLicenseModalShell = () => {
 
     return {
         modal,
+        titleWrapNode: modal.querySelector('[data-role="title-wrap"]'),
         titleNode: modal.querySelector('[data-role="title"]'),
         subtitleNode: modal.querySelector('[data-role="subtitle"]'),
         bodyNode: modal.querySelector('[data-role="body"]'),
@@ -1035,10 +1339,14 @@ const ensureCardLicenseModalShell = () => {
 };
 
 const renderCardLicenseModal = ({ title, subtitle, content }) => {
-    const { titleNode, subtitleNode, bodyNode, closeNode } = ensureCardLicenseModalShell();
-    titleNode.textContent = title;
+    const { titleWrapNode, titleNode, subtitleNode, bodyNode, closeNode } = ensureCardLicenseModalShell();
+    const hasTitle = Boolean(title);
+    const hasSubtitle = Boolean(subtitle);
+
+    titleNode.textContent = title || '';
     subtitleNode.textContent = subtitle || '';
-    subtitleNode.style.display = subtitle ? 'block' : 'none';
+    subtitleNode.style.display = hasSubtitle ? 'block' : 'none';
+    titleWrapNode.hidden = !(hasTitle || hasSubtitle);
     bodyNode.replaceChildren(content);
 
     queueMicrotask(() => {
@@ -1072,22 +1380,19 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     const licenses = Array.isArray(licenseResult?.licenses) ? licenseResult.licenses : [];
 
     const overviewPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
-    const overviewHead = createCardLicenseModalNode('div', 'dao-license-modal__overview-head');
-    const overviewTitleWrap = createCardLicenseModalNode('div', 'dao-license-modal__overview-title-wrap');
-    overviewTitleWrap.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__overview-heading', serverInfo.companyName || 'Сервер Syrve'));
-    overviewTitleWrap.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__overview-caption', formatCardServerContextLabel(serverContext)));
-    overviewHead.appendChild(overviewTitleWrap);
-
-    if (serverInfo.licenseStatus) {
-        const statusPill = createCardLicenseModalNode(
+    const serverBar = createCardLicenseModalNode('div', 'dao-license-modal__server-bar');
+    const serverInfoNode = createCardLicenseModalNode('div', 'dao-license-modal__server-info');
+    serverInfoNode.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__server-label', 'Адреса сервера'));
+    serverInfoNode.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__server-value', formatCardServerContextLabel(serverContext)));
+    serverBar.appendChild(serverInfoNode);
+    serverBar.appendChild(
+        createCardLicenseModalNode(
             'span',
             `dao-license-modal__status-pill dao-license-modal__status-pill--${resolveCardLicenseStatusTone(serverInfo.licenseStatus)}`,
-            `Статус: ${serverInfo.licenseStatus}`
-        );
-        overviewHead.appendChild(statusPill);
-    }
-
-    overviewPanel.appendChild(overviewHead);
+            formatCardLicenseServerStatus(serverInfo.licenseStatus)
+        )
+    );
+    overviewPanel.appendChild(serverBar);
 
     const badgeContainer = createCardLicenseModalNode('div', 'dao-license-modal__badges');
     if (serverInfo.companyName) {
@@ -1113,13 +1418,6 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     fragment.appendChild(overviewPanel);
 
     const licensesPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
-    const licensesHead = createCardLicenseModalNode('div', 'dao-license-modal__section-head');
-    const sectionTitleWrap = createCardLicenseModalNode('div', 'dao-license-modal__section-title-wrap');
-    sectionTitleWrap.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__section-title', 'Ліцензії'));
-    sectionTitleWrap.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__section-caption', 'Результат серверної перевірки ліцензій Syrve.'));
-    licensesHead.appendChild(sectionTitleWrap);
-    licensesHead.appendChild(createCardLicenseModalChip(`${licenses.length} позицій`));
-    licensesPanel.appendChild(licensesHead);
 
     if (!licenses.length) {
         licensesPanel.appendChild(createCardLicenseModalNode('div', 'dao-license-modal__empty-state', 'Сервер відповів без списку ліцензій.'));
@@ -1139,7 +1437,7 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
             return;
         }
 
-        const groupNode = createCardLicenseModalNode('section', 'dao-license-modal__group');
+        const groupNode = createCardLicenseModalNode('section', `dao-license-modal__group dao-license-modal__group--${groupId}`);
         const groupHead = createCardLicenseModalNode('div', 'dao-license-modal__group-head');
         groupHead.appendChild(createCardLicenseModalNode('h4', 'dao-license-modal__group-title', CARD_LICENSE_GROUP_LABELS[groupId] || CARD_LICENSE_GROUP_LABELS.other));
         groupHead.appendChild(createCardLicenseModalChip(`${groupLicenses.length}`));
@@ -1153,9 +1451,6 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
             if (license.friendlyName && license.name && license.name !== license.friendlyName) {
                 secondaryParts.push(license.name);
             }
-            if (license.id) {
-                secondaryParts.push(`ID ${license.id}`);
-            }
 
             const item = createCardLicenseModalNode('article', 'dao-license-modal__license-item');
             const main = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
@@ -1166,10 +1461,14 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
 
             const meta = createCardLicenseModalNode('div', 'dao-license-modal__license-meta');
             if (license.count !== null && license.count !== undefined) {
-                meta.appendChild(createCardLicenseModalChip(`К-сть ${license.count}`));
+                meta.appendChild(createCardLicenseModalChip(`К-сть ${license.count}`, 'dao-license-modal__chip--count'));
             }
             if (license.validUntil) {
-                meta.appendChild(createCardLicenseModalChip(`До ${license.validUntil}`));
+                const validityLabel = formatCardLicenseValidityLabel(license.validUntil);
+                const validityModifier = validityLabel === 'ПЕРМАНЕНТНО'
+                    ? 'dao-license-modal__chip--permanent'
+                    : 'dao-license-modal__chip--date';
+                meta.appendChild(createCardLicenseModalChip(validityLabel, validityModifier));
             }
             if (!meta.childElementCount) {
                 meta.appendChild(createCardLicenseModalChip('Без деталей'));
@@ -1191,24 +1490,24 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
 
 const showCardLicenseLoadingModal = (serverContext) => {
     renderCardLicenseModal({
-        title: 'Перевірка ліцензій Syrve',
-        subtitle: formatCardServerContextLabel(serverContext),
+        title: '',
+        subtitle: '',
         content: buildCardLicenseLoadingContent()
     });
 };
 
 const showCardLicenseErrorModal = (serverContext, errorMessage) => {
     renderCardLicenseModal({
-        title: 'Перевірка ліцензій Syrve',
-        subtitle: formatCardServerContextLabel(serverContext),
+        title: '',
+        subtitle: '',
         content: buildCardLicenseErrorContent(errorMessage)
     });
 };
 
 const showCardLicenseResultModal = (serverContext, licenseResult) => {
     renderCardLicenseModal({
-        title: 'Ліцензії Syrve',
-        subtitle: formatCardServerContextLabel(serverContext),
+        title: '',
+        subtitle: '',
         content: buildCardLicenseResultContent(serverContext, licenseResult)
     });
 };

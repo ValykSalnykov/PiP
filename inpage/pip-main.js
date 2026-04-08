@@ -34,6 +34,9 @@
 
   const EXTENSION_SOURCE = 'pip-extension';
   const PAGE_SOURCE = 'pip-page';
+  const TASK_HIGHLIGHT_CLASS = 'pipx-task-flash';
+  const TASK_HIGHLIGHT_DURATION_MS = 10000;
+  const TASK_HIGHLIGHT_PULSE_DURATION_MS = 5000;
 
   let lastKnownSize = null;
 
@@ -45,6 +48,7 @@
     styleObserver: null,
     styleMirror: null,
     titleObserver: null,
+    mirrorObserver: null,
     pipHideHandler: null,
     pipResizeHandler: null,
     elementResizeObserver: null,
@@ -59,6 +63,9 @@
     movedNodes: null,
     mode: null,
     selectedElement: null,
+    mirroredElement: null,
+    taskHighlightExpirations: new Map(),
+    taskHighlightCleanupTimer: null,
     elementParent: null,
     elementNextSibling: null,
     elementPlaceholder: null,
@@ -95,7 +102,9 @@
     'hub.daolog.net': [
       {
         patterns: ['/TimeTracker'],
+        mode: 'mirror',
         selector: '#root > div > div > div.tasks-page',
+        pipStyleProfile: 'daolog-time-tracker-compact',
         width: 390,
         height: 500
       },
@@ -292,13 +301,24 @@
       }
     }
 
+    if (siteRule?.mode === 'mirror' && finalElement && finalMode !== 'page') {
+      if (finalMode !== 'mirror') {
+        logger.info('Overriding requested PiP mode with site mirror rule', {
+          trigger,
+          requestedMode: finalMode,
+          enforcedMode: siteRule.mode
+        });
+      }
+      finalMode = 'mirror';
+    }
+
     // Если режим не определен, используем режим 'element' если есть элемент, иначе 'page'
     if (!finalMode) {
       finalMode = finalElement ? 'element' : 'page';
     }
 
-    if (finalMode === 'element' && !finalElement) {
-      logger.warn('Element mode requested but no element resolved — falling back to page mode');
+    if ((finalMode === 'element' || finalMode === 'mirror') && !finalElement) {
+      logger.warn('Element-based mode requested but no element resolved — falling back to page mode');
       finalMode = 'page';
     }
 
@@ -310,17 +330,18 @@
     const customSize = finalWidth && finalHeight ? { width: finalWidth, height: finalHeight } : null;
     const lockSize = Boolean(siteRule?.lockSize);
 
-    if (finalMode === 'element' && finalElement) {
+    if ((finalMode === 'element' || finalMode === 'mirror') && finalElement) {
       return openPip({ 
-        mode: 'element', 
+        mode: finalMode,
         element: finalElement, 
         trigger,
         customSize,
-        lockSize
+        lockSize,
+        siteRule
       });
     }
 
-    return openPip({ mode: 'page', trigger, customSize, lockSize });
+    return openPip({ mode: 'page', trigger, customSize, lockSize, siteRule });
   }
 
   async function toggle(trigger) {
@@ -491,7 +512,7 @@
         : null;
       const lockSize = Boolean(siteRule?.lockSize);
       
-      openElementInPip(target, selectionTrigger, customSize, lockSize).catch((error) => {
+      openElementInPip(target, selectionTrigger, customSize, lockSize, siteRule).catch((error) => {
         logger.error('Failed to open selected element in PiP', error);
       });
     });
@@ -621,11 +642,12 @@
     return null;
   }
 
-  async function openElementInPip(element, trigger, customSize = null, lockSize = false) {
-    return openPip({ mode: 'element', element, trigger, customSize, lockSize });
+  async function openElementInPip(element, trigger, customSize = null, lockSize = false, siteRule = null) {
+    const mode = siteRule?.mode === 'mirror' ? 'mirror' : 'element';
+    return openPip({ mode, element, trigger, customSize, lockSize, siteRule });
   }
 
-  async function openPip({ mode, element, trigger, customSize, lockSize = false }) {
+  async function openPip({ mode, element, trigger, customSize, lockSize = false, siteRule = null }) {
     if (!isSupported()) {
       logger.warn('Document Picture-in-Picture API is not available');
       showUnsupportedNotice();
@@ -644,6 +666,8 @@
     }
 
     disconnectElementResizeObserver();
+    disconnectMirrorObserver();
+    resetTaskHighlights();
 
     state.openPromise = (async () => {
       const options = { preferInitialWindowPlacement: true };
@@ -655,7 +679,9 @@
         options.height = clamped.height;
         logger.info('Using custom size for PiP window', { width: clamped.width, height: clamped.height });
       } else {
-        const initialElementSize = mode === 'element' ? getElementPreferredPipSize(element) : null;
+        const initialElementSize = mode === 'element' || mode === 'mirror'
+          ? getElementPreferredPipSize(element)
+          : null;
 
         if (initialElementSize) {
           options.width = initialElementSize.width;
@@ -706,6 +732,7 @@
       state.mode = mode;
       state.movedNodes = null;
       state.selectedElement = null;
+      state.mirroredElement = null;
       state.elementParent = null;
       state.elementNextSibling = null;
       state.elementPlaceholder = null;
@@ -721,6 +748,14 @@
           state.movedNodes = result.movedNodes;
           placeholder = createPagePlaceholder();
           body.appendChild(placeholder);
+        } else if (mode === 'mirror') {
+          if (!element || !(element instanceof Element) || !element.isConnected) {
+            throw new Error('Selected element is not available in the document');
+          }
+          const result = createMirroredFragment(element);
+          fragment = result.fragment;
+          state.selectedElement = result.sourceElement;
+          state.mirroredElement = result.mirroredElement;
         } else if (mode === 'element') {
           if (!element || !(element instanceof Element) || !element.isConnected) {
             throw new Error('Selected element is not available in the document');
@@ -738,15 +773,18 @@
 
         state.placeholder = placeholder;
 
-        document.documentElement?.setAttribute('data-pipx-active', 'true');
-        body.setAttribute('data-pipx-state', mode === 'page' ? 'placeholder' : 'element-placeholder');
+        if (mode !== 'mirror') {
+          document.documentElement?.setAttribute('data-pipx-active', 'true');
+          body.setAttribute('data-pipx-state', mode === 'page' ? 'placeholder' : 'element-placeholder');
+        }
 
         preparePipWindow(
           pipWindow,
           fragment,
           state.originalBackground,
           state.htmlAttributes,
-          state.bodyAttributes
+          state.bodyAttributes,
+          siteRule
         );
 
         const pipHideHandler = () => {
@@ -784,7 +822,7 @@
           pipWindow.focus();
         }
 
-        if (mode === 'element' && !lockSize) {
+        if ((mode === 'element' || mode === 'mirror') && !lockSize) {
           queueMicrotask(() => {
             const activeWindow = state.pipWindow;
             const target = state.selectedElement;
@@ -802,6 +840,10 @@
           disconnectElementResizeObserver();
         }
 
+        if (mode === 'mirror' && state.selectedElement) {
+          attachMirrorObserver(state.selectedElement);
+        }
+
         post({ type: 'PIP_STATE', state: 'open', trigger, mode });
         logger.info('PiP window initialised', { trigger, mode });
       } catch (error) {
@@ -814,6 +856,9 @@
               body.appendChild(node);
             });
             state.movedNodes = null;
+          } else if (mode === 'mirror') {
+            state.selectedElement = null;
+            state.mirroredElement = null;
           } else if (mode === 'element') {
             if (state.selectedElement) {
               const adopt = state.selectedElement.ownerDocument === document
@@ -872,6 +917,7 @@
     state.restorePromise = (async () => {
       state.isRestoring = true;
       disconnectElementResizeObserver();
+      disconnectMirrorObserver();
       const activeMode = state.mode;
       logger.info('Restoring content from PiP', { trigger, mode: activeMode });
 
@@ -888,6 +934,10 @@
         if (state.placeholder?.isConnected) {
           state.placeholder.remove();
         }
+      } else if (mode === 'mirror') {
+        state.selectedElement = null;
+        state.mirroredElement = null;
+        state.placeholder = null;
       } else if (mode === 'element') {
         const parent = state.elementParent;
         const placeholder = state.elementPlaceholder;
@@ -1071,7 +1121,250 @@
     return clone;
   }
 
-  function preparePipWindow(pipWindow, fragment, backgroundColor, htmlAttributes, bodyAttributes) {
+  function createMirroredFragment(element) {
+    const fragment = document.createDocumentFragment();
+    const mirroredElement = element.cloneNode(true);
+    fragment.appendChild(mirroredElement);
+
+    return {
+      fragment,
+      mirroredElement,
+      sourceElement: element
+    };
+  }
+
+  function normalizeTaskIdentityPart(value) {
+    return (value || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  }
+
+  function isTimeTrackerMirrorRoot(element) {
+    return Boolean(
+      state.mode === 'mirror' &&
+      element instanceof Element &&
+      element.classList.contains('tasks-page')
+    );
+  }
+
+  function getTimeTrackerPoolIdentifier(section, poolIndex) {
+    const title = normalizeTaskIdentityPart(
+      section?.querySelector('.pool-title, .pool-title-m')?.textContent || ''
+    );
+    return title || `pool-${poolIndex}`;
+  }
+
+  function getTimeTrackerTaskKey(card, poolIdentifier, cardIndex) {
+    const planfixLink = card.querySelector('a[href*="/task/"]')?.getAttribute('href')?.trim();
+    if (planfixLink) {
+      return `planfix:${planfixLink}`;
+    }
+
+    const taskName = normalizeTaskIdentityPart(
+      card.querySelector('.task-name')?.textContent || ''
+    );
+
+    if (taskName) {
+      return `fallback:${poolIdentifier}:${taskName}:${cardIndex}`;
+    }
+
+    return `fallback:${poolIdentifier}:index:${cardIndex}`;
+  }
+
+  function captureTimeTrackerTaskSnapshot(root) {
+    if (!(root instanceof Element)) {
+      return [];
+    }
+
+    const sections = Array.from(root.children).filter(
+      (child) => child instanceof Element && child.classList.contains('pool-section')
+    );
+
+    const snapshot = [];
+
+    sections.forEach((section, poolIndex) => {
+      const poolIdentifier = getTimeTrackerPoolIdentifier(section, poolIndex);
+      const cards = Array.from(section.querySelectorAll('.task-card'));
+
+      cards.forEach((card, cardIndex) => {
+        const key = getTimeTrackerTaskKey(card, poolIdentifier, cardIndex);
+        card.dataset.pipxTaskKey = key;
+        snapshot.push({ key, element: card });
+      });
+    });
+
+    return snapshot;
+  }
+
+  function getNewTaskHighlightKeys(previousSnapshot, nextSnapshot) {
+    const previousKeys = new Set(previousSnapshot.map((entry) => entry.key));
+    const nextKeys = new Set();
+
+    nextSnapshot.forEach((entry) => {
+      if (!previousKeys.has(entry.key)) {
+        nextKeys.add(entry.key);
+      }
+    });
+
+    return nextKeys;
+  }
+
+  function clearTaskHighlightCleanupTimer() {
+    if (state.taskHighlightCleanupTimer) {
+      clearTimeout(state.taskHighlightCleanupTimer);
+      state.taskHighlightCleanupTimer = null;
+    }
+  }
+
+  function resetTaskHighlights() {
+    clearTaskHighlightCleanupTimer();
+    state.taskHighlightExpirations.clear();
+  }
+
+  function pruneExpiredTaskHighlights(now = Date.now()) {
+    for (const [taskKey, expiresAt] of state.taskHighlightExpirations.entries()) {
+      if (expiresAt <= now) {
+        state.taskHighlightExpirations.delete(taskKey);
+      }
+    }
+  }
+
+  function getActiveTaskHighlightKeys(now = Date.now()) {
+    pruneExpiredTaskHighlights(now);
+    return new Set(state.taskHighlightExpirations.keys());
+  }
+
+  function applyTaskHighlightsFromSnapshot(snapshot, activeKeys, now = Date.now()) {
+    snapshot.forEach(({ key, element }) => {
+      const isActive = activeKeys.has(key);
+      element.classList.toggle(TASK_HIGHLIGHT_CLASS, isActive);
+
+      if (isActive) {
+        const expiresAt = state.taskHighlightExpirations.get(key) ?? now;
+        const elapsed = Math.max(0, TASK_HIGHLIGHT_DURATION_MS - Math.max(0, expiresAt - now));
+        const pulseElapsed = Math.min(elapsed, TASK_HIGHLIGHT_PULSE_DURATION_MS);
+        element.style.setProperty('--pipx-task-flash-delay', `${-pulseElapsed}ms`);
+      } else {
+        element.style.removeProperty('--pipx-task-flash-delay');
+      }
+    });
+  }
+
+  function refreshTaskHighlights() {
+    const mirroredElement = state.mirroredElement;
+    if (!isTimeTrackerMirrorRoot(mirroredElement)) {
+      return;
+    }
+
+    const now = Date.now();
+    const snapshot = captureTimeTrackerTaskSnapshot(mirroredElement);
+    const activeKeys = getActiveTaskHighlightKeys(now);
+    applyTaskHighlightsFromSnapshot(snapshot, activeKeys, now);
+  }
+
+  function scheduleTaskHighlightCleanup() {
+    clearTaskHighlightCleanupTimer();
+
+    if (state.taskHighlightExpirations.size === 0) {
+      return;
+    }
+
+    let nextExpiry = Infinity;
+    for (const expiresAt of state.taskHighlightExpirations.values()) {
+      nextExpiry = Math.min(nextExpiry, expiresAt);
+    }
+
+    const delay = Math.max(0, nextExpiry - Date.now() + 16);
+    state.taskHighlightCleanupTimer = setTimeout(() => {
+      pruneExpiredTaskHighlights();
+      refreshTaskHighlights();
+      scheduleTaskHighlightCleanup();
+    }, delay);
+  }
+
+  function registerTaskHighlights(taskKeys) {
+    if (!taskKeys || taskKeys.size === 0) {
+      return getActiveTaskHighlightKeys();
+    }
+
+    const expiresAt = Date.now() + TASK_HIGHLIGHT_DURATION_MS;
+    taskKeys.forEach((taskKey) => {
+      state.taskHighlightExpirations.set(taskKey, expiresAt);
+    });
+
+    scheduleTaskHighlightCleanup();
+    return getActiveTaskHighlightKeys();
+  }
+
+  function syncMirroredElement() {
+    const sourceElement = state.selectedElement;
+    const mirroredElement = state.mirroredElement;
+    const pipWindow = state.pipWindow;
+
+    if (!sourceElement || !mirroredElement || !pipWindow || pipWindow.closed) {
+      return;
+    }
+
+    if (!sourceElement.isConnected) {
+      logger.warn('Source element disconnected while PiP mirror is active');
+      restore('mirror-source-disconnected');
+      return;
+    }
+
+    const previousSnapshot = isTimeTrackerMirrorRoot(mirroredElement)
+      ? captureTimeTrackerTaskSnapshot(mirroredElement)
+      : [];
+    const nextMirror = sourceElement.cloneNode(true);
+    const nextSnapshot = isTimeTrackerMirrorRoot(nextMirror)
+      ? captureTimeTrackerTaskSnapshot(nextMirror)
+      : [];
+    const now = Date.now();
+    const newTaskKeys = getNewTaskHighlightKeys(previousSnapshot, nextSnapshot);
+    const activeHighlightKeys = registerTaskHighlights(newTaskKeys);
+    applyTaskHighlightsFromSnapshot(nextSnapshot, activeHighlightKeys, now);
+
+    if (mirroredElement.isConnected) {
+      mirroredElement.replaceWith(nextMirror);
+    } else {
+      pipWindow.document.body.appendChild(nextMirror);
+    }
+    state.mirroredElement = nextMirror;
+  }
+
+  function attachMirrorObserver(element) {
+    disconnectMirrorObserver();
+    if (!element) return;
+
+    let syncQueued = false;
+    const scheduleSync = () => {
+      if (syncQueued) return;
+      syncQueued = true;
+      queueMicrotask(() => {
+        syncQueued = false;
+        syncMirroredElement();
+      });
+    };
+
+    const observer = new MutationObserver(scheduleSync);
+    observer.observe(element, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    state.mirrorObserver = observer;
+  }
+
+  function disconnectMirrorObserver() {
+    if (state.mirrorObserver) {
+      state.mirrorObserver.disconnect();
+      state.mirrorObserver = null;
+    }
+  }
+
+  function preparePipWindow(pipWindow, fragment, backgroundColor, htmlAttributes, bodyAttributes, siteRule) {
     logger.debug('Preparing PiP window document');
 
     const pipDoc = pipWindow.document;
@@ -1096,12 +1389,12 @@
 
     copyStylesheets(pipDoc);
     mirrorTitle(pipDoc);
-    injectPipStyles(pipDoc);
+    injectPipStyles(pipDoc, siteRule);
 
     pipDoc.body.appendChild(fragment);
   }
 
-  function injectPipStyles(pipDoc) {
+  function injectPipStyles(pipDoc, siteRule) {
     const style = pipDoc.createElement('style');
     style.id = 'pipx-style';
     style.textContent = `
@@ -1160,8 +1453,249 @@ body.pipx-body {
   height: auto !important;
   max-height: none !important;
 }
+${getSiteSpecificPipStyles(siteRule)}
 `;
     pipDoc.head.appendChild(style);
+  }
+
+  function getSiteSpecificPipStyles(siteRule) {
+    if (siteRule?.pipStyleProfile !== 'daolog-time-tracker-compact') {
+      return '';
+    }
+
+    return `
+
+/* TimeTracker compact profile for PiP */
+.tasks-page {
+  gap: 0 !important;
+  padding: 8px !important;
+}
+
+.tasks-page .pool-section {
+  padding: 8px !important;
+  margin-bottom: 0 !important;
+  border-radius: 8px !important;
+}
+
+.tasks-page .pool-section:last-child {
+  margin-bottom: 0 !important;
+}
+
+.tasks-page .pool-header {
+  display: none !important;
+}
+
+.tasks-page .pool-header-left {
+  display: none !important;
+}
+
+.tasks-page .pool-title,
+.tasks-page .pool-title-m {
+  gap: 6px !important;
+  line-height: 1.15 !important;
+}
+
+.tasks-page .task-count,
+.tasks-page .task-count-m,
+.tasks-page .server-count {
+  line-height: 1.1 !important;
+}
+
+.tasks-page .pool-section .tasks-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+
+.tasks-page .task-card {
+  margin: 0 !important;
+  border-radius: 6px !important;
+  position: relative !important;
+  overflow: visible !important;
+  transform-origin: center center !important;
+  transition: box-shadow 0.2s ease, transform 0.2s ease !important;
+}
+
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} {
+  animation: pipx-task-flash-pulse ${TASK_HIGHLIGHT_PULSE_DURATION_MS}ms ease-out 1 both !important;
+  animation-delay: var(--pipx-task-flash-delay, 0ms) !important;
+  will-change: transform, box-shadow;
+  z-index: 4 !important;
+  background-color: #2fd212 !important;
+  color: #050505 !important;
+}
+
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} .task-name,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} .task-info,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} .task-timer,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} .status-timer,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} .task-link-btn,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} a,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} span,
+.tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} div {
+  color: #050505 !important;
+}
+
+@keyframes pipx-task-flash-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0) !important;
+  }
+  10% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.92), 0 0 10px 4px rgba(59, 130, 246, 0.72), 0 0 18px 8px rgba(96, 165, 250, 0.34) !important;
+  }
+  20% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0) !important;
+  }
+  30% {
+    transform: scale(1.045);
+    box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.96), 0 0 12px 4px rgba(59, 130, 246, 0.8), 0 0 20px 9px rgba(96, 165, 250, 0.4) !important;
+  }
+  40% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0) !important;
+  }
+  50% {
+    transform: scale(1.055);
+    box-shadow: 0 0 0 3px rgba(191, 219, 254, 0.98), 0 0 14px 5px rgba(59, 130, 246, 0.84), 0 0 22px 10px rgba(96, 165, 250, 0.44) !important;
+  }
+  60% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0) !important;
+  }
+  70% {
+    transform: scale(1.065);
+    box-shadow: 0 0 0 3px rgba(191, 219, 254, 1), 0 0 15px 5px rgba(59, 130, 246, 0.88), 0 0 24px 10px rgba(96, 165, 250, 0.5) !important;
+  }
+  80% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0) !important;
+  }
+  90% {
+    transform: scale(1.075);
+    box-shadow: 0 0 0 3px rgba(219, 234, 254, 1), 0 0 16px 6px rgba(59, 130, 246, 0.94), 0 0 26px 10px rgba(96, 165, 250, 0.56) !important;
+  }
+  96% {
+    transform: scale(1);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.18), 0 0 5px 1px rgba(59, 130, 246, 0.12) !important;
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0) !important;
+  }
+}
+
+.tasks-page .task-content {
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 6px 8px !important;
+}
+
+.tasks-page .task-info {
+  gap: 2px !important;
+  min-width: 0 !important;
+}
+
+.tasks-page .task-name {
+  font-size: 13px !important;
+  line-height: 1.25 !important;
+}
+
+.tasks-page .task-actions {
+  display: none !important;
+}
+
+.tasks-page .pip-toggle-btn,
+.tasks-page .task-link-btn,
+.tasks-page .reverse-timer-btn,
+.tasks-page .collapse-btn {
+  display: none !important;
+}
+
+.tasks-page .task-timer,
+.tasks-page .status-timer {
+  min-height: 24px !important;
+  height: auto !important;
+  padding: 2px 6px !important;
+  font-size: 11px !important;
+  line-height: 1.1 !important;
+}
+
+.tasks-page .no-tasks {
+  padding: 8px 0 !important;
+}
+
+@media (max-width: 420px) {
+  .tasks-page {
+    gap: 0 !important;
+    padding: 6px !important;
+  }
+
+  .tasks-page .pool-section {
+    padding: 6px !important;
+    margin-bottom: 0 !important;
+  }
+
+  .tasks-page .pool-title,
+  .tasks-page .pool-title-m {
+    font-size: 14px !important;
+  }
+
+  .tasks-page .task-count,
+  .tasks-page .task-count-m,
+  .tasks-page .server-count {
+    font-size: 12px !important;
+  }
+
+  .tasks-page .pool-section .tasks-list {
+    gap: 3px !important;
+  }
+
+  .tasks-page .task-content {
+    gap: 5px !important;
+    padding: 5px 6px !important;
+  }
+
+  .tasks-page .task-name {
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+  }
+
+  .tasks-page .task-timer,
+  .tasks-page .status-timer {
+    min-height: 20px !important;
+    padding: 1px 5px !important;
+    font-size: 10px !important;
+  }
+}
+
+@media (max-width: 340px) {
+  .tasks-page {
+    gap: 0 !important;
+    padding: 4px !important;
+  }
+
+  .tasks-page .pool-section {
+    padding: 4px !important;
+  }
+
+  .tasks-page .pool-section .tasks-list {
+    gap: 2px !important;
+  }
+
+  .tasks-page .task-content {
+    gap: 4px !important;
+    padding: 4px 5px !important;
+  }
+
+  .tasks-page .task-name {
+    font-size: 11px !important;
+    line-height: 1.15 !important;
+  }
+}
+`;
   }
 
   function copyStylesheets(pipDoc) {
@@ -1264,6 +1798,8 @@ body.pipx-body {
 
   function cleanupObservers() {
     disconnectElementResizeObserver();
+    disconnectMirrorObserver();
+    resetTaskHighlights();
     if (state.styleObserver) {
       state.styleObserver.disconnect();
       state.styleObserver = null;

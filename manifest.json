@@ -24,6 +24,7 @@
     "storage"
   ],
   "host_permissions": [
+    "http://daologistics.duckdns.org:8100/*",
     "https://*.us-central1.hosted.app/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",

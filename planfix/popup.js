@@ -1,4 +1,5 @@
 const inputField = document.getElementById("inputField");
+const apiKeyField = document.getElementById("apiKeyField");
 const saveButton = document.getElementById("saveButton");
 const serverField = document.getElementById("serverField");
 const portField = document.getElementById("portField");
@@ -18,6 +19,7 @@ const discoBall = document.getElementById("discoBall");
 
 const STORAGE_KEYS = {
   clientId: "userInput",
+  apiKey: "credentialsApiKey",
   discoMode: "discoMode",
   serverContext: "lastServerContext"
 };
@@ -38,6 +40,8 @@ const storageSet = (data) => new Promise((resolve) => {
     resolve();
   });
 });
+
+const isNumericClientId = (value) => /^\d+$/.test((value || "").trim());
 
 const normalizeServer = (value) => {
   const rawValue = (value || "").trim();
@@ -253,10 +257,12 @@ const updateClientIdUI = (value) => {
 (async () => {
   const result = await storageGet([
     STORAGE_KEYS.clientId,
+    STORAGE_KEYS.apiKey,
     STORAGE_KEYS.discoMode,
     STORAGE_KEYS.serverContext
   ]);
   const stored = result[STORAGE_KEYS.clientId] || "";
+  const storedApiKey = result[STORAGE_KEYS.apiKey] || "";
   const discoMode = result[STORAGE_KEYS.discoMode] || false;
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
 
@@ -266,6 +272,10 @@ const updateClientIdUI = (value) => {
     fetchMode(stored);
   } else {
     updateClientIdUI("");
+  }
+
+  if (apiKeyField) {
+    apiKeyField.value = storedApiKey;
   }
 
   restoreServerContext(serverContext);
@@ -291,9 +301,22 @@ saveButton.addEventListener("click", () => {
     alert("Please, input Client ID.");
     return;
   }
-  chrome.storage.local.set({ userInput: inputValue }, () => {
+
+  if (!isNumericClientId(inputValue)) {
+    alert("Client ID must contain digits only.");
+    inputField.focus();
+    inputField.select();
+    return;
+  }
+
+  const apiKeyValue = apiKeyField?.value.trim() || "";
+
+  chrome.storage.local.set({
+    [STORAGE_KEYS.clientId]: inputValue,
+    [STORAGE_KEYS.apiKey]: apiKeyValue
+  }, () => {
     updateClientIdUI(inputValue);
-    alert("Client ID saved!");
+    alert("Settings saved!");
     window.close();
   });
 });

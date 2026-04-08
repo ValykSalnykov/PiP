@@ -1,6 +1,4 @@
 (() => {
-  const LOGIN = 'valentyn_syrve';
-  const PASSWORD = 'VvVv4815162342';
   const SUBMIT_GUARD_KEY = 'daoToolsSyrveAutoLoginAttempted';
   const HEALTH_GUARD_KEY = 'daoToolsSyrveHealthReported';
   const FORM_SELECTOR = 'form[action*="j_spring_security_check"]';
@@ -15,10 +13,19 @@
 
   const loginElements = resolveLoginElements();
   if (loginElements && !hasAttemptedAutoLogin()) {
-    markAutoLoginAttempted();
-    fillField(loginElements.usernameField, LOGIN);
-    fillField(loginElements.passwordField, PASSWORD);
-    submitForm(loginElements.form, loginElements.submitButton);
+    requestSyrveCredentials()
+      .then((credential) => {
+        markAutoLoginAttempted();
+        fillField(loginElements.usernameField, credential.login);
+        fillField(loginElements.passwordField, credential.password);
+        submitForm(loginElements.form, loginElements.submitButton);
+      })
+      .catch((error) => {
+        chrome.runtime.sendMessage({
+          action: 'SYRVE_HEALTH_PERIOD_RESULT',
+          error: error?.message || 'Не вдалося отримати логін і пароль для Syrve.'
+        });
+      });
   }
 
   if (isHealthPage() && !loginElements && !hasReportedHealthPeriod()) {
@@ -79,6 +86,30 @@
     } catch (error) {
       document.documentElement.dataset.daoToolsSyrveHealthReported = '1';
     }
+  }
+
+  function requestSyrveCredentials() {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: 'GET_SYRVE_CREDENTIALS' }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        if (!response?.ok || !response.credential) {
+          reject(new Error(response?.error || 'Credentials для Syrve недоступні.'));
+          return;
+        }
+
+        const { login, password } = response.credential;
+        if (typeof login !== 'string' || typeof password !== 'string') {
+          reject(new Error('Credentials для Syrve мають некоректний формат.'));
+          return;
+        }
+
+        resolve({ login, password });
+      });
+    });
   }
 
   function waitForHealthPeriod() {

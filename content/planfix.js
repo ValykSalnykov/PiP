@@ -184,10 +184,19 @@ const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
+const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
+const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
 const CARD_SERVER_AVAILABILITY_CHECK_DELAY_MS = 450;
+const CARD_LICENSE_GROUP_ORDER = ['mobile', 'api', 'pos', 'other'];
+const CARD_LICENSE_GROUP_LABELS = {
+    mobile: 'Мобільні',
+    api: 'API',
+    pos: 'POS',
+    other: 'Інше'
+};
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it', 'daocloud.fun'];
 
 let cardErrorPollToken = 0;
@@ -196,6 +205,8 @@ let cardLoginStatusTimeoutId = 0;
 let cardLoginRequestToken = 0;
 let cardServerAvailabilityCheckToken = 0;
 let cardServerAvailabilityCheckTimerId = 0;
+let cardLicenseCheckRequestToken = 0;
+let activeCardLicenseCheckButton = null;
 
 const normalizeServerHost = (value) => {
     const rawValue = (value || '').trim();
@@ -544,6 +555,724 @@ const setCardErrorMessage = (message) => {
 const clearCardErrorMessage = () => {
     setCardErrorMessage('');
 };
+
+const formatCardServerContextLabel = (context) => {
+    if (!context?.server) {
+        return '';
+    }
+
+    return context.port ? `${context.server}:${context.port}` : context.server;
+};
+
+const setCardActionButtonLoading = (button, isLoading, loadingLabel = '') => {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    if (!button.dataset.defaultLabel) {
+        button.dataset.defaultLabel = button.textContent || '';
+    }
+
+    button.disabled = isLoading;
+    button.style.cursor = isLoading ? 'wait' : 'pointer';
+    button.style.opacity = isLoading ? '0.82' : '1';
+    button.textContent = isLoading && loadingLabel ? loadingLabel : button.dataset.defaultLabel;
+};
+
+const resetActiveCardLicenseCheckButton = () => {
+    if (!(activeCardLicenseCheckButton instanceof HTMLButtonElement)) {
+        activeCardLicenseCheckButton = null;
+        return;
+    }
+
+    delete activeCardLicenseCheckButton.dataset.licenseCheckToken;
+    setCardActionButtonLoading(activeCardLicenseCheckButton, false);
+    activeCardLicenseCheckButton = null;
+};
+
+const closeCardLicenseCheckModal = () => {
+    cardLicenseCheckRequestToken += 1;
+    resetActiveCardLicenseCheckButton();
+    document.getElementById(CARD_LICENSE_MODAL_ID)?.remove();
+};
+
+const ensureCardLicenseModalStyles = () => {
+    if (document.getElementById(CARD_LICENSE_MODAL_STYLE_ID)) {
+        return;
+    }
+
+    const style = document.createElement('style');
+    style.id = CARD_LICENSE_MODAL_STYLE_ID;
+    style.textContent = `
+        #${CARD_LICENSE_MODAL_ID} {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483646;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: rgba(15, 23, 42, 0.64);
+            backdrop-filter: blur(3px);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
+            width: min(860px, 100%);
+            max-height: min(84vh, 760px);
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            border-radius: 20px;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            box-shadow: 0 28px 80px rgba(15, 23, 42, 0.28);
+            overflow: hidden;
+            color: #0f172a;
+            font-family: "Inter", "Segoe UI", Arial, sans-serif;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__header {
+            padding: 22px 22px 14px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+            background:
+                radial-gradient(circle at top left, rgba(79, 70, 229, 0.12), rgba(255, 255, 255, 0) 48%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__eyebrow {
+            margin: 0 0 6px;
+            color: #4f46e5;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title {
+            margin: 0;
+            font-size: 24px;
+            line-height: 1.2;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__subtitle {
+            margin: 8px 0 0;
+            color: #475569;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__icon-button,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__button {
+            border: none;
+            cursor: pointer;
+            transition: transform 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__icon-button {
+            width: 38px;
+            height: 38px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.14);
+            color: #334155;
+            font-size: 20px;
+            flex: 0 0 auto;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__icon-button:hover,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__button:hover {
+            transform: translateY(-1px);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__body {
+            padding: 20px 22px;
+            overflow: auto;
+            display: grid;
+            gap: 16px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__panel {
+            display: grid;
+            gap: 12px;
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-head,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-head,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-heading,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-title,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-title {
+            margin: 0;
+            font-size: 18px;
+            line-height: 1.25;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-caption,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-caption {
+            margin: 6px 0 0;
+            color: #64748b;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill--success {
+            background: rgba(5, 150, 105, 0.12);
+            color: #047857;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill--warning {
+            background: rgba(217, 119, 6, 0.12);
+            color: #b45309;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-pill--error {
+            background: rgba(220, 38, 38, 0.12);
+            color: #dc2626;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__error-state {
+            border-radius: 14px;
+            padding: 12px 14px;
+            line-height: 1.5;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note {
+            background: rgba(79, 70, 229, 0.08);
+            color: #4338ca;
+            border: 1px solid rgba(79, 70, 229, 0.12);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__error-state {
+            background: rgba(220, 38, 38, 0.08);
+            color: #b91c1c;
+            border: 1px solid rgba(220, 38, 38, 0.16);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge {
+            min-width: 120px;
+            display: grid;
+            gap: 4px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(79, 70, 229, 0.08);
+            border: 1px solid rgba(79, 70, 229, 0.12);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge-label {
+            color: #6366f1;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__badge-value {
+            color: #1e293b;
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-item {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(248, 250, 252, 0.95);
+            border: 1px solid rgba(226, 232, 240, 0.95);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-main {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-name {
+            margin: 0;
+            color: #0f172a;
+            font-size: 15px;
+            font-weight: 700;
+            line-height: 1.35;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-subtitle {
+            margin: 0;
+            color: #64748b;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-meta {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 8px;
+            flex: 0 0 auto;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__chip {
+            background: rgba(148, 163, 184, 0.14);
+            color: #334155;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__state {
+            justify-items: start;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__spinner {
+            width: 36px;
+            height: 36px;
+            border-radius: 999px;
+            border: 3px solid rgba(79, 70, 229, 0.18);
+            border-top-color: #4f46e5;
+            animation: dao-license-modal-spin 0.9s linear infinite;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__empty-state {
+            padding: 14px;
+            border-radius: 14px;
+            background: rgba(148, 163, 184, 0.1);
+            color: #475569;
+            line-height: 1.5;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__footer {
+            display: flex;
+            justify-content: flex-end;
+            padding: 0 22px 22px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__button {
+            padding: 10px 16px;
+            border-radius: 12px;
+            background: rgba(79, 70, 229, 0.12);
+            color: #4338ca;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        @keyframes dao-license-modal-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 640px) {
+            #${CARD_LICENSE_MODAL_ID} {
+                padding: 12px;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
+                width: 100%;
+                max-height: 88vh;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__header,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__body,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__footer {
+                padding-left: 16px;
+                padding-right: 16px;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-item,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__overview-head,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__section-head,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__group-head,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__title-row {
+                flex-direction: column;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-meta {
+                justify-content: flex-start;
+            }
+        }
+    `;
+
+    document.head.appendChild(style);
+};
+
+const createCardLicenseModalNode = (tagName, className, textContent = '') => {
+    const node = document.createElement(tagName);
+    if (className) {
+        node.className = className;
+    }
+    if (textContent) {
+        node.textContent = textContent;
+    }
+    return node;
+};
+
+const createCardLicenseModalBadge = (label, value) => {
+    const badge = createCardLicenseModalNode('div', 'dao-license-modal__badge');
+    badge.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__badge-label', label));
+    badge.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__badge-value', value));
+    return badge;
+};
+
+const createCardLicenseModalChip = (text) => createCardLicenseModalNode('span', 'dao-license-modal__chip', text);
+
+const resolveCardLicenseStatusTone = (status) => {
+    const normalizedStatus = String(status || '').trim().toLowerCase();
+    if (!normalizedStatus) {
+        return 'warning';
+    }
+
+    if (normalizedStatus === 'ok' || normalizedStatus === 'success') {
+        return 'success';
+    }
+
+    if (['error', 'failed', 'invalid', 'denied'].some((token) => normalizedStatus.includes(token))) {
+        return 'error';
+    }
+
+    return 'warning';
+};
+
+const normalizeCardLicenseGroup = (groupId) => {
+    const normalizedGroup = String(groupId || '').trim().toLowerCase();
+    return CARD_LICENSE_GROUP_ORDER.includes(normalizedGroup) ? normalizedGroup : 'other';
+};
+
+const ensureCardLicenseModalShell = () => {
+    ensureCardLicenseModalStyles();
+
+    let modal = document.getElementById(CARD_LICENSE_MODAL_ID);
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = CARD_LICENSE_MODAL_ID;
+        modal.innerHTML = `
+            <div class="dao-license-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="dao-license-modal-title">
+                <div class="dao-license-modal__header">
+                    <div class="dao-license-modal__title-row">
+                        <div>
+                            <p class="dao-license-modal__eyebrow">Syrve license check</p>
+                            <h2 id="dao-license-modal-title" class="dao-license-modal__title" data-role="title"></h2>
+                            <p class="dao-license-modal__subtitle" data-role="subtitle"></p>
+                        </div>
+                        <button type="button" class="dao-license-modal__icon-button" data-role="close" aria-label="Закрити">×</button>
+                    </div>
+                </div>
+                <div class="dao-license-modal__body" data-role="body"></div>
+                <div class="dao-license-modal__footer">
+                    <button type="button" class="dao-license-modal__button" data-role="close">Закрити</button>
+                </div>
+            </div>
+        `;
+
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeCardLicenseCheckModal();
+            }
+        });
+
+        modal.querySelectorAll('[data-role="close"]').forEach((node) => {
+            node.addEventListener('click', () => {
+                closeCardLicenseCheckModal();
+            });
+        });
+
+        document.body.appendChild(modal);
+    }
+
+    return {
+        modal,
+        titleNode: modal.querySelector('[data-role="title"]'),
+        subtitleNode: modal.querySelector('[data-role="subtitle"]'),
+        bodyNode: modal.querySelector('[data-role="body"]'),
+        closeNode: modal.querySelector('[data-role="close"]')
+    };
+};
+
+const renderCardLicenseModal = ({ title, subtitle, content }) => {
+    const { titleNode, subtitleNode, bodyNode, closeNode } = ensureCardLicenseModalShell();
+    titleNode.textContent = title;
+    subtitleNode.textContent = subtitle || '';
+    subtitleNode.style.display = subtitle ? 'block' : 'none';
+    bodyNode.replaceChildren(content);
+
+    queueMicrotask(() => {
+        closeNode?.focus({ preventScroll: true });
+    });
+};
+
+const buildCardLicenseLoadingContent = () => {
+    const panel = createCardLicenseModalNode('section', 'dao-license-modal__panel dao-license-modal__state');
+    panel.appendChild(createCardLicenseModalNode('div', 'dao-license-modal__spinner'));
+    panel.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__section-title', 'Перевіряємо ліцензії...'));
+    panel.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__section-caption', 'Запит виконується через ваш сервер. Це може зайняти кілька секунд.'));
+    return panel;
+};
+
+const buildCardLicenseErrorContent = (errorMessage) => {
+    const panel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
+    panel.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__section-title', 'Не вдалося отримати стан ліцензій'));
+
+    const errorNode = createCardLicenseModalNode('div', 'dao-license-modal__error-state');
+    errorNode.appendChild(createCardLicenseModalNode('strong', '', 'Щось пішло не так.'));
+    errorNode.appendChild(createCardLicenseModalNode('p', '', errorMessage || 'Невідома помилка перевірки ліцензій.'));
+    panel.appendChild(errorNode);
+
+    return panel;
+};
+
+const buildCardLicenseResultContent = (serverContext, licenseResult) => {
+    const fragment = document.createDocumentFragment();
+    const serverInfo = licenseResult?.server && typeof licenseResult.server === 'object' ? licenseResult.server : {};
+    const licenses = Array.isArray(licenseResult?.licenses) ? licenseResult.licenses : [];
+
+    const overviewPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
+    const overviewHead = createCardLicenseModalNode('div', 'dao-license-modal__overview-head');
+    const overviewTitleWrap = createCardLicenseModalNode('div', 'dao-license-modal__overview-title-wrap');
+    overviewTitleWrap.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__overview-heading', serverInfo.companyName || 'Сервер Syrve'));
+    overviewTitleWrap.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__overview-caption', formatCardServerContextLabel(serverContext)));
+    overviewHead.appendChild(overviewTitleWrap);
+
+    if (serverInfo.licenseStatus) {
+        const statusPill = createCardLicenseModalNode(
+            'span',
+            `dao-license-modal__status-pill dao-license-modal__status-pill--${resolveCardLicenseStatusTone(serverInfo.licenseStatus)}`,
+            `Статус: ${serverInfo.licenseStatus}`
+        );
+        overviewHead.appendChild(statusPill);
+    }
+
+    overviewPanel.appendChild(overviewHead);
+
+    const badgeContainer = createCardLicenseModalNode('div', 'dao-license-modal__badges');
+    if (serverInfo.companyName) {
+        badgeContainer.appendChild(createCardLicenseModalBadge('Компанія', serverInfo.companyName));
+    }
+    if (serverInfo.serverType) {
+        badgeContainer.appendChild(createCardLicenseModalBadge('Тип', serverInfo.serverType));
+    }
+    if (serverInfo.serialNumber) {
+        badgeContainer.appendChild(createCardLicenseModalBadge('Serial', serverInfo.serialNumber));
+    }
+    if (serverInfo.crmId) {
+        badgeContainer.appendChild(createCardLicenseModalBadge('CRM ID', serverInfo.crmId));
+    }
+    if (badgeContainer.childElementCount > 0) {
+        overviewPanel.appendChild(badgeContainer);
+    }
+
+    if (serverInfo.statusMessage) {
+        overviewPanel.appendChild(createCardLicenseModalNode('div', 'dao-license-modal__status-note', serverInfo.statusMessage));
+    }
+
+    fragment.appendChild(overviewPanel);
+
+    const licensesPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
+    const licensesHead = createCardLicenseModalNode('div', 'dao-license-modal__section-head');
+    const sectionTitleWrap = createCardLicenseModalNode('div', 'dao-license-modal__section-title-wrap');
+    sectionTitleWrap.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__section-title', 'Ліцензії'));
+    sectionTitleWrap.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__section-caption', 'Результат серверної перевірки ліцензій Syrve.'));
+    licensesHead.appendChild(sectionTitleWrap);
+    licensesHead.appendChild(createCardLicenseModalChip(`${licenses.length} позицій`));
+    licensesPanel.appendChild(licensesHead);
+
+    if (!licenses.length) {
+        licensesPanel.appendChild(createCardLicenseModalNode('div', 'dao-license-modal__empty-state', 'Сервер відповів без списку ліцензій.'));
+        fragment.appendChild(licensesPanel);
+        return fragment;
+    }
+
+    const groupedLicenses = new Map(CARD_LICENSE_GROUP_ORDER.map((groupId) => [groupId, []]));
+    licenses.forEach((license) => {
+        groupedLicenses.get(normalizeCardLicenseGroup(license.groupId)).push(license);
+    });
+
+    const groupList = createCardLicenseModalNode('div', 'dao-license-modal__group-list');
+    CARD_LICENSE_GROUP_ORDER.forEach((groupId) => {
+        const groupLicenses = groupedLicenses.get(groupId) || [];
+        if (!groupLicenses.length) {
+            return;
+        }
+
+        const groupNode = createCardLicenseModalNode('section', 'dao-license-modal__group');
+        const groupHead = createCardLicenseModalNode('div', 'dao-license-modal__group-head');
+        groupHead.appendChild(createCardLicenseModalNode('h4', 'dao-license-modal__group-title', CARD_LICENSE_GROUP_LABELS[groupId] || CARD_LICENSE_GROUP_LABELS.other));
+        groupHead.appendChild(createCardLicenseModalChip(`${groupLicenses.length}`));
+        groupNode.appendChild(groupHead);
+
+        const licenseList = createCardLicenseModalNode('div', 'dao-license-modal__license-list');
+        groupLicenses.forEach((license) => {
+            const primaryName = license.friendlyName || license.name || `Ліцензія ${license.id || ''}`.trim();
+            const secondaryParts = [];
+
+            if (license.friendlyName && license.name && license.name !== license.friendlyName) {
+                secondaryParts.push(license.name);
+            }
+            if (license.id) {
+                secondaryParts.push(`ID ${license.id}`);
+            }
+
+            const item = createCardLicenseModalNode('article', 'dao-license-modal__license-item');
+            const main = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
+            main.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-name', primaryName));
+            if (secondaryParts.length) {
+                main.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', secondaryParts.join(' • ')));
+            }
+
+            const meta = createCardLicenseModalNode('div', 'dao-license-modal__license-meta');
+            if (license.count !== null && license.count !== undefined) {
+                meta.appendChild(createCardLicenseModalChip(`К-сть ${license.count}`));
+            }
+            if (license.validUntil) {
+                meta.appendChild(createCardLicenseModalChip(`До ${license.validUntil}`));
+            }
+            if (!meta.childElementCount) {
+                meta.appendChild(createCardLicenseModalChip('Без деталей'));
+            }
+
+            item.appendChild(main);
+            item.appendChild(meta);
+            licenseList.appendChild(item);
+        });
+
+        groupNode.appendChild(licenseList);
+        groupList.appendChild(groupNode);
+    });
+
+    licensesPanel.appendChild(groupList);
+    fragment.appendChild(licensesPanel);
+    return fragment;
+};
+
+const showCardLicenseLoadingModal = (serverContext) => {
+    renderCardLicenseModal({
+        title: 'Перевірка ліцензій Syrve',
+        subtitle: formatCardServerContextLabel(serverContext),
+        content: buildCardLicenseLoadingContent()
+    });
+};
+
+const showCardLicenseErrorModal = (serverContext, errorMessage) => {
+    renderCardLicenseModal({
+        title: 'Перевірка ліцензій Syrve',
+        subtitle: formatCardServerContextLabel(serverContext),
+        content: buildCardLicenseErrorContent(errorMessage)
+    });
+};
+
+const showCardLicenseResultModal = (serverContext, licenseResult) => {
+    renderCardLicenseModal({
+        title: 'Ліцензії Syrve',
+        subtitle: formatCardServerContextLabel(serverContext),
+        content: buildCardLicenseResultContent(serverContext, licenseResult)
+    });
+};
+
+const requestCardLicenseCheck = (context) => new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+        action: 'CHECK_SYRVE_LICENSE',
+        address: context?.server,
+        port: context?.port
+    }, (response) => {
+        if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+        }
+
+        if (!response?.ok) {
+            reject(new Error(response?.error || 'Невідома помилка перевірки ліцензій.'));
+            return;
+        }
+
+        resolve(response);
+    });
+});
+
+const handleCardLicenseCheck = async (button, serverContext) => {
+    const requestToken = ++cardLicenseCheckRequestToken;
+    activeCardLicenseCheckButton = button;
+    button.dataset.licenseCheckToken = String(requestToken);
+    setCardActionButtonLoading(button, true, 'Перевірка...');
+    showCardLicenseLoadingModal(serverContext);
+
+    try {
+        const response = await requestCardLicenseCheck(serverContext);
+        if (button.dataset.licenseCheckToken !== String(requestToken) || requestToken !== cardLicenseCheckRequestToken) {
+            return;
+        }
+
+        showCardLicenseResultModal({
+            server: response.address,
+            port: String(response.port)
+        }, response.result);
+    } catch (error) {
+        if (button.dataset.licenseCheckToken !== String(requestToken) || requestToken !== cardLicenseCheckRequestToken) {
+            return;
+        }
+
+        showCardLicenseErrorModal(serverContext, error?.message || 'Не вдалося перевірити ліцензії.');
+    } finally {
+        if (button.dataset.licenseCheckToken === String(requestToken)) {
+            delete button.dataset.licenseCheckToken;
+            setCardActionButtonLoading(button, false);
+        }
+
+        if (activeCardLicenseCheckButton === button && !button.dataset.licenseCheckToken) {
+            activeCardLicenseCheckButton = null;
+        }
+    }
+};
+
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.getElementById(CARD_LICENSE_MODAL_ID)) {
+        closeCardLicenseCheckModal();
+    }
+});
 
 const getCardLoginStatusNode = () => document.getElementById(CARD_LOGIN_STATUS_ID);
 
@@ -1016,12 +1745,23 @@ const pollCardServerError = async (context, options = {}) => {
             white-space: nowrap;
         `;
         btn.addEventListener('mouseenter', () => { btn.style.opacity = "0.82"; });
-        btn.addEventListener('mouseleave', () => { btn.style.opacity = "1"; });
-        btn.addEventListener('click', () => {
+        btn.addEventListener('mouseleave', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = "1";
+            }
+        });
+        btn.addEventListener('click', async () => {
             const serverData = getServerData(scopeRoot, true);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
+            clearCardErrorMessage();
+
+            if (action === 'check') {
+                await handleCardLicenseCheck(btn, serverData);
+                return;
+            }
+
             pollCardServerError(serverData).catch((error) => {
                 console.error('Не вдалося оновити помилку під кнопками ліцензії:', error);
             });
@@ -1032,6 +1772,26 @@ const pollCardServerError = async (context, options = {}) => {
         });
         return btn;
     };
+
+    const openSyrvePageWithCredentials = ({ server, path }) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+            action: 'OPEN_SYRVE_PAGE',
+            server,
+            path
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+
+            if (!response?.ok) {
+                reject(new Error(response?.error || 'Невідома помилка відкриття сторінки Syrve.'));
+                return;
+            }
+
+            resolve(response.tabId);
+        });
+    });
 
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
@@ -1057,19 +1817,24 @@ const pollCardServerError = async (context, options = {}) => {
             if (!serverData) return;
 
             invalidateCardErrorPolling();
-            pollCardServerError(serverData).catch((error) => {
-                console.error('Не вдалося оновити помилку під кнопкою вебморди:', error);
-            });
+            clearCardErrorMessage();
+
+            try {
+                await openSyrvePageWithCredentials({
+                    server: serverData.server,
+                    path: '/resto'
+                });
+            } catch (error) {
+                console.error('Не вдалося відкрити вебморду Syrve:', error);
+                setCardErrorMessage(`Не вдалося відкрити вебморду: ${error?.message || 'невідома помилка'}`);
+                return;
+            }
 
             try {
                 await copyTextToClipboard(serverData.server);
             } catch (error) {
-                console.error('Не вдалося скопіювати адресу сервера:', error);
-                alert('Не вдалося скопіювати адресу сервера.');
-                return;
+                console.warn('Не вдалося скопіювати адресу сервера після відкриття вебморди:', error);
             }
-
-            window.open(`https://${serverData.server}/resto`, '_blank');
         });
         return btn;
     };
@@ -1093,11 +1858,22 @@ const pollCardServerError = async (context, options = {}) => {
         `;
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const serverData = getServerData(scopeRoot, true);
             if (!serverData) return;
 
-            window.open(`https://${serverData.server}/resto/service/monitoring/connections.jsp`, '_blank');
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
+
+            try {
+                await openSyrvePageWithCredentials({
+                    server: serverData.server,
+                    path: '/resto/service/monitoring/connections.jsp'
+                });
+            } catch (error) {
+                console.error('Не вдалося відкрити сторінку пристроїв Syrve:', error);
+                setCardErrorMessage(`Не вдалося відкрити Пристрої: ${error?.message || 'невідома помилка'}`);
+            }
         });
         return btn;
     };
@@ -1132,6 +1908,8 @@ const pollCardServerError = async (context, options = {}) => {
 
             const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             activePeriodRequestId = requestId;
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
             setCardPeriodMessage('Отримання періоду...');
 
             chrome.runtime.sendMessage({
@@ -1222,6 +2000,7 @@ const pollCardServerError = async (context, options = {}) => {
             document.querySelectorAll(`#${CARD_ERROR_ID}`).forEach((node) => node.remove());
             document.querySelectorAll(`#${CARD_LOGIN_STATUS_ID}`).forEach((node) => node.remove());
             document.querySelectorAll(`[${CARD_SERVER_AVAILABILITY_ATTR}="true"]`).forEach((node) => node.remove());
+            closeCardLicenseCheckModal();
             invalidateCardErrorPolling();
             invalidateCardLoginRequest();
             invalidateCardServerAvailabilityCheck();

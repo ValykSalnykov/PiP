@@ -330,7 +330,12 @@
       <div class="field">
         <input type="text" id="inputField" placeholder="Введіть Client ID">
       </div>
-      <button id="saveButton" class="button">Зберегти Client ID</button>
+      <div class="field">
+        <label for="apiKeyField">X-API-Key</label>
+        <input type="password" id="apiKeyField" placeholder="Введіть ключ доступу до credentials API" autocomplete="off">
+        <p class="field__note">Поточний Client ID також використовується як numeric id для отримання логіна та пароля.</p>
+      </div>
+      <button id="saveButton" class="button">Зберегти налаштування</button>
     </section>
 
     <section class="card" aria-labelledby="one-time">

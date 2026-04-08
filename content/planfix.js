@@ -1256,10 +1256,30 @@ const pollCardServerError = async (context, options = {}) => {
 
     const DEFAULT_COL_CLASSES = {
         [HEADER_CLIENT]: 'td-item-qe-4',
-        [HEADER_SERVER]: 'td-item-qe-6',
-        [HEADER_PORT]: 'td-item-qe-10',
-        [HEADER_CHAIN]: 'td-item-qe-8'
+        [HEADER_SERVER]: 'td-item-qe-8',
+        [HEADER_PORT]: 'td-item-qe-18',
+        [HEADER_CHAIN]: 'td-item-qe-10'
     };
+
+    const HEADER_CANDIDATE_SELECTOR = [
+        '.td-head-common-sort',
+        '.td-head',
+        'thead th',
+        'thead td',
+        'th[data-columnid]',
+        'th[data-column-id]',
+        'td[data-columnid]',
+        'td[data-column-id]',
+        '[role="columnheader"]'
+    ].join(', ');
+
+    const normalizeComparableText = (value) => (
+        (value || '')
+            .toLowerCase()
+            .replace(/[^a-zа-яіїєґ0-9]+/giu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+    );
 
     const findQeClassSuffix = (element) => {
         if (!element) return null;
@@ -1269,16 +1289,96 @@ const pollCardServerError = async (context, options = {}) => {
         return match ? match[1] : null;
     };
 
-    // Знаходить реальний CSS-клас td для колонки через data-columnid у header DOM.
-    const findColClass = (headerText) => {
+    const getColumnIdFromElement = (element) => {
+        if (!element) return '';
+
+        const directValue = element.getAttribute?.('data-columnid') || element.getAttribute?.('data-column-id');
+        if (directValue) return directValue.trim();
+
+        const container = element.closest?.('td, th, .td-head');
+        const containerValue = container?.getAttribute?.('data-columnid') || container?.getAttribute?.('data-column-id');
+        if (containerValue) return containerValue.trim();
+
+        const nestedValue = element.querySelector?.('[data-columnid], [data-column-id]');
+        return nestedValue?.getAttribute('data-columnid') || nestedValue?.getAttribute('data-column-id') || '';
+    };
+
+    const findColumnHeaderByText = (headerText) => {
+        const normalizedHeader = normalizeComparableText(headerText);
+        if (!normalizedHeader) return null;
+
+        const candidates = [...document.querySelectorAll(HEADER_CANDIDATE_SELECTOR)].filter((element) => (
+            element.closest('.tbl-list, .tbl-list-scroll__container, .td-head')
+        ));
+
+        const exactMatch = candidates.find((candidate) => normalizeComparableText(candidate.textContent) === normalizedHeader);
+        return exactMatch?.closest('td, th, .td-head') || exactMatch || null;
+    };
+
+    const findColumnHeaderById = (headerText) => {
         const columnId = COLUMN_IDS[headerText];
-        if (!columnId) return DEFAULT_COL_CLASSES[headerText] || null;
+        if (!columnId) return null;
+
+        return findColumnHeaderByColumnId(columnId);
+    };
+
+    const findColumnHeaderByColumnId = (columnId) => {
+        if (!columnId) return null;
 
         const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${columnId}"]`)
-            || document.querySelector(`[data-columnid="${columnId}"]`);
-        const headerCell = headerTrigger?.closest('td, th, .td-head');
-        const qeSuffix = findQeClassSuffix(headerCell) || findQeClassSuffix(headerTrigger);
+            || document.querySelector(`.td-head-common-sort[data-column-id="${columnId}"]`)
+            || document.querySelector(`[data-columnid="${columnId}"]`)
+            || document.querySelector(`[data-column-id="${columnId}"]`);
+
+        return headerTrigger?.closest('td, th, .td-head') || headerTrigger || null;
+    };
+
+    const findColumnClassFromTable = (table, columnIndex) => {
+        if (!table || columnIndex < 0) return null;
+
+        const firstDataRow = [...table.querySelectorAll('tbody tr.handbook-data-item')]
+            .find((row) => row.children && row.children.length > columnIndex);
+        if (!firstDataRow) return null;
+
+        const cell = firstDataRow.children[columnIndex];
+        if (!cell) return null;
+
+        return [...cell.classList].find((cls) => /^td-item-qe-\d+$/.test(cls)) || null;
+    };
+
+    const findColumnClassById = (columnId) => {
+        if (!columnId) return null;
+
+        const columnElement = document.querySelector(`col[data-column-id="${columnId}"]`)
+            || document.querySelector(`col[data-columnid="${columnId}"]`);
+        if (columnElement?.parentElement) {
+            const columnIndex = [...columnElement.parentElement.children].indexOf(columnElement);
+            const tableClass = findColumnClassFromTable(columnElement.closest('table'), columnIndex);
+            if (tableClass) return tableClass;
+        }
+
+        const headerElement = findColumnHeaderByColumnId(columnId)
+            || document.querySelector(`[data-columnid="${columnId}"]`)
+            || document.querySelector(`[data-column-id="${columnId}"]`);
+        const qeSuffix = findQeClassSuffix(headerElement)
+            || findQeClassSuffix(headerElement?.querySelector?.('.td-head-common-sort'));
+
+        return qeSuffix ? `td-item-qe-${qeSuffix}` : null;
+    };
+
+    // Основний шлях: знайти колонку за текстом у header. Запасний: перейти до data-columnid/data-column-id.
+    const findColClass = (headerText) => {
+        const headerElement = findColumnHeaderByText(headerText);
+        const qeSuffix = findQeClassSuffix(headerElement)
+            || findQeClassSuffix(headerElement?.querySelector?.('.td-head-common-sort'));
         if (qeSuffix) return `td-item-qe-${qeSuffix}`;
+
+        const headerColumnId = getColumnIdFromElement(headerElement);
+        const classFromTextMatch = findColumnClassById(headerColumnId);
+        if (classFromTextMatch) return classFromTextMatch;
+
+        const fallbackClass = findColumnClassById(COLUMN_IDS[headerText]);
+        if (fallbackClass) return fallbackClass;
 
         return DEFAULT_COL_CLASSES[headerText] || null;
     };
@@ -1513,10 +1613,12 @@ const pollCardServerError = async (context, options = {}) => {
     ];
 
     const attachCellHover = () => {
+        const resolvedColumns = COLS
+            .map(({ headerText, label }) => ({ headerText, label, colClass: findColClass(headerText) }))
+            .filter(({ colClass }) => Boolean(colClass));
+
         document.querySelectorAll('tr.handbook-data-item').forEach(row => {
-            COLS.forEach(({ headerText, label }) => {
-                const colClass = findColClass(headerText);
-                if (!colClass) return;
+            resolvedColumns.forEach(({ label, colClass }) => {
                 const td = row.querySelector(`td.${colClass}`);
                 if (!td || td.dataset.hoverAttached) return;
                 td.dataset.hoverAttached = '1';
@@ -1532,9 +1634,7 @@ const pollCardServerError = async (context, options = {}) => {
     };
 
     const attachServerHeaderHover = () => {
-        const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${COLUMN_IDS[HEADER_SERVER]}"]`)
-            || document.querySelector(`[data-columnid="${COLUMN_IDS[HEADER_SERVER]}"]`);
-        const hoverTarget = headerTrigger?.closest('td, th, .td-head') || headerTrigger;
+        const hoverTarget = findColumnHeaderByText(HEADER_SERVER) || findColumnHeaderById(HEADER_SERVER);
         if (!hoverTarget || hoverTarget.dataset.serverHoverAttached) return;
 
         hoverTarget.dataset.serverHoverAttached = '1';

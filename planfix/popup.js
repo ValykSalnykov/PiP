@@ -4,8 +4,6 @@ const saveButton = document.getElementById("saveButton");
 const serverField = document.getElementById("serverField");
 const portField = document.getElementById("portField");
 const sendDataButton = document.getElementById("sendDataButton");
-const checkLicenseButton = document.getElementById("checkLicenseButton");
-const updateLicenseButton = document.getElementById("updateLicenseButton");
 const modeInfo = document.getElementById("modeInfo");
 const toggleModeButton = document.getElementById("toggleModeButton");
 const showErrorButton = document.getElementById("showErrorButton");
@@ -460,28 +458,6 @@ showErrorButton.addEventListener("click", async () => {
     }
   });
 });
-
-// Ліцензії Syrve — відкрити менеджер ліцензій
-const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
-
-const openLicenseManager = (action) => {
-  const context = getCurrentServerContext();
-  const server = context?.server || "";
-  if (!server) {
-    alert("Будь ласка, введіть адресу сервера.");
-    serverField.focus();
-    return;
-  }
-
-  persistCurrentServerContext();
-  refreshInlineServerError();
-
-  const url = `${LICENSE_MANAGER_BASE}?server=${encodeURIComponent(server)}&action=${action}`;
-  chrome.tabs.create({ url });
-};
-
-checkLicenseButton?.addEventListener("click", () => openLicenseManager("check"));
-updateLicenseButton?.addEventListener("click", () => openLicenseManager("update"));
 
 // Disco ball toggle
 discoBall?.addEventListener("click", () => {

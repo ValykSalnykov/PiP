@@ -284,8 +284,13 @@ async function fetchSyrveCredentials() {
 }
 
 async function fetchSyrveLicenseCheck({ address, port }) {
-  const storageData = await storageGet([STORAGE_KEYS.apiKey]);
+  const storageData = await storageGet([STORAGE_KEYS.clientId, STORAGE_KEYS.apiKey]);
+  const clientId = String(storageData[STORAGE_KEYS.clientId] ?? '').trim();
   const apiKey = String(storageData[STORAGE_KEYS.apiKey] ?? '').trim();
+
+  if (!clientId) {
+    throw new Error('Спочатку збережіть User ID у popup розширення.');
+  }
 
   if (!apiKey) {
     throw new Error('Спочатку збережіть X-API-Key у popup розширення.');
@@ -300,7 +305,8 @@ async function fetchSyrveLicenseCheck({ address, port }) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey
+        'X-API-Key': apiKey,
+        'X-User-Id': clientId
       },
       body: JSON.stringify({
         address: normalizedAddress,
@@ -447,6 +453,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     openHealthPeriodTab({
       requesterTabId,
       server: message.server,
+      port: message.port,
       requestId: message.requestId
     })
       .then((serviceTabId) => sendResponse({ ok: true, tabId: serviceTabId }))
@@ -463,6 +470,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     openSyrvePage({
       server: message.server,
+      port: message.port,
       path: message.path,
       active: message.active !== false
     })
@@ -584,10 +592,27 @@ function updateBadge(tabId) {
   log.debug('Badge updated', { tabId, status: isOpen ? 'ON' : 'OFF' });
 }
 
-async function openHealthPeriodTab({ requesterTabId, server, requestId }) {
+function isHttpOnlySyrveHost(server) {
+  return String(server ?? '').trim().toLowerCase().endsWith('.daocloud.fun');
+}
+
+function buildSyrvePageUrl({ server, port, path }) {
+  const normalizedServer = String(server ?? '').trim().toLowerCase();
+  const normalizedPort = String(port ?? '').trim();
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const protocol = isHttpOnlySyrveHost(normalizedServer) ? 'http' : 'https';
+  const portSegment = normalizedPort ? `:${normalizedPort}` : '';
+  return `${protocol}://${normalizedServer}${portSegment}${normalizedPath}`;
+}
+
+async function openHealthPeriodTab({ requesterTabId, server, port, requestId }) {
   const credential = await fetchSyrveCredentials();
   const createdTab = await chrome.tabs.create({
-    url: `https://${server}/resto/service/monitoring/health.jsp`,
+    url: buildSyrvePageUrl({
+      server,
+      port,
+      path: '/resto/service/monitoring/health.jsp'
+    }),
     active: false
   });
 
@@ -613,16 +638,17 @@ async function openHealthPeriodTab({ requesterTabId, server, requestId }) {
     requesterTabId,
     serviceTabId: createdTab.id,
     server,
+    port,
     requestId
   });
 
   return createdTab.id;
 }
 
-async function openSyrvePage({ server, path, active = true }) {
+async function openSyrvePage({ server, path, port, active = true }) {
   const credential = await fetchSyrveCredentials();
   const createdTab = await chrome.tabs.create({
-    url: `https://${server}${path}`,
+    url: buildSyrvePageUrl({ server, port, path }),
     active
   });
 
@@ -634,6 +660,7 @@ async function openSyrvePage({ server, path, active = true }) {
   log.info('Opened Syrve page after credentials preflight', {
     serviceTabId: createdTab.id,
     server,
+    port,
     path,
     active
   });
@@ -642,8 +669,7 @@ async function openSyrvePage({ server, path, active = true }) {
 }
 
 async function probeServerAvailability({ server, port }) {
-  const portSegment = port ? `:${port}` : '';
-  const url = `https://${server}${portSegment}/resto`;
+  const url = buildSyrvePageUrl({ server, port, path: '/resto/' });
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SERVER_AVAILABILITY_TIMEOUT_MS);
 

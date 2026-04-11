@@ -385,7 +385,8 @@ const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
-const CARD_SERVER_AVAILABILITY_CHECK_DELAY_MS = 450;
+const CARD_SERVER_AVAILABILITY_CHECK_DEBOUNCE_MS = 450;
+const CARD_SERVER_AVAILABILITY_RECHECK_INTERVAL_MS = 60 * 1000;
 const CARD_LICENSE_GROUP_ORDER = ['pos', 'api', 'mobile', 'other'];
 const CARD_LICENSE_GROUP_LABELS = {
     mobile: 'Мобільні',
@@ -402,6 +403,9 @@ let cardLoginStatusTimeoutId = 0;
 let cardLoginRequestToken = 0;
 let cardServerAvailabilityCheckToken = 0;
 let cardServerAvailabilityCheckTimerId = 0;
+let cardServerAvailabilityScheduledKey = '';
+let cardServerAvailabilityInFlightKey = '';
+let cardServerAvailabilitySnapshot = null;
 let cardLicenseCheckRequestToken = 0;
 let activeCardLicenseCheckButton = null;
 
@@ -490,6 +494,33 @@ const getCardServerAvailabilityUrl = (context) => {
     }
 
     return buildCardServerUrl(context, '/resto/');
+};
+
+const getCardServerAvailabilityCacheKey = (context) => getCardServerAvailabilityUrl(context);
+
+const applyRecentCardServerAvailabilitySnapshot = (cacheKey, field72ValueElement) => {
+    if (!cacheKey || !cardServerAvailabilitySnapshot || cardServerAvailabilitySnapshot.key !== cacheKey) {
+        return false;
+    }
+
+    if (Date.now() - cardServerAvailabilitySnapshot.checkedAt >= CARD_SERVER_AVAILABILITY_RECHECK_INTERVAL_MS) {
+        return false;
+    }
+
+    setCardServerAvailabilityState(
+        cardServerAvailabilitySnapshot.state,
+        cardServerAvailabilitySnapshot.message,
+        field72ValueElement
+    );
+    return true;
+};
+
+const resolveCardServerAvailabilityTarget = (field72ValueElement) => {
+    if (field72ValueElement?.isConnected) {
+        return field72ValueElement;
+    }
+
+    return document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
 };
 
 const invalidateCardErrorPolling = () => {
@@ -605,6 +636,8 @@ const invalidateCardServerAvailabilityCheck = () => {
         clearTimeout(cardServerAvailabilityCheckTimerId);
         cardServerAvailabilityCheckTimerId = 0;
     }
+
+    cardServerAvailabilityScheduledKey = '';
 };
 
 const wait = (delay) => new Promise((resolve) => {
@@ -613,11 +646,13 @@ const wait = (delay) => new Promise((resolve) => {
 
 const probeCardServerAvailability = async (context, field72ValueElement, requestToken) => {
     const url = getCardServerAvailabilityUrl(context);
+    const cacheKey = getCardServerAvailabilityCacheKey(context);
     if (!url) {
         setCardServerAvailabilityState('idle', '', field72ValueElement);
         return false;
     }
 
+    cardServerAvailabilityInFlightKey = cacheKey;
     setCardServerAvailabilityState('checking', `Перевірка ${url}`, field72ValueElement);
 
     try {
@@ -645,10 +680,18 @@ const probeCardServerAvailability = async (context, field72ValueElement, request
         }
 
         const isReachable = response.reachable === true;
+        const nextState = isReachable ? 'online' : 'offline';
+        const nextMessage = response.error || `${url} відповідає зі статусом ${response.status}.`;
+        cardServerAvailabilitySnapshot = {
+            key: cacheKey,
+            checkedAt: Date.now(),
+            state: nextState,
+            message: nextMessage
+        };
         setCardServerAvailabilityState(
-            isReachable ? 'online' : 'offline',
-            response.error || `${url} відповідає зі статусом ${response.status}.`,
-            field72ValueElement
+            nextState,
+            nextMessage,
+            resolveCardServerAvailabilityTarget(field72ValueElement)
         );
         return isReachable;
     } catch (error) {
@@ -656,37 +699,72 @@ const probeCardServerAvailability = async (context, field72ValueElement, request
             return false;
         }
 
+        const nextMessage = error?.message || `Не вдалося підключитися до ${url}.`;
+        cardServerAvailabilitySnapshot = {
+            key: cacheKey,
+            checkedAt: Date.now(),
+            state: 'offline',
+            message: nextMessage
+        };
         setCardServerAvailabilityState(
             'offline',
-            error?.message || `Не вдалося підключитися до ${url}.`,
-            field72ValueElement
+            nextMessage,
+            resolveCardServerAvailabilityTarget(field72ValueElement)
         );
         return false;
+    } finally {
+        if (cardServerAvailabilityInFlightKey === cacheKey) {
+            cardServerAvailabilityInFlightKey = '';
+        }
     }
 };
 
 const scheduleCardServerAvailabilityCheck = (context, field72ValueElement) => {
-    invalidateCardServerAvailabilityCheck();
-
     if (!field72ValueElement) {
         return;
     }
 
     if (!context?.server) {
+        invalidateCardServerAvailabilityCheck();
         setCardServerAvailabilityState('idle', '', field72ValueElement);
         return;
     }
 
+    const cacheKey = getCardServerAvailabilityCacheKey(context);
+    if (!cacheKey) {
+        invalidateCardServerAvailabilityCheck();
+        setCardServerAvailabilityState('idle', '', field72ValueElement);
+        return;
+    }
+
+    if (applyRecentCardServerAvailabilitySnapshot(cacheKey, field72ValueElement)) {
+        return;
+    }
+
+    if (cardServerAvailabilityInFlightKey === cacheKey) {
+        setCardServerAvailabilityState('checking', `Перевірка ${cacheKey}`, field72ValueElement);
+        return;
+    }
+
+    if (cardServerAvailabilityScheduledKey === cacheKey && cardServerAvailabilityCheckTimerId) {
+        setCardServerAvailabilityState('checking', `Перевірка ${cacheKey}`, field72ValueElement);
+        return;
+    }
+
+    invalidateCardServerAvailabilityCheck();
+
     const requestToken = cardServerAvailabilityCheckToken;
+    cardServerAvailabilityScheduledKey = cacheKey;
     cardServerAvailabilityCheckTimerId = window.setTimeout(async () => {
         cardServerAvailabilityCheckTimerId = 0;
+        cardServerAvailabilityScheduledKey = '';
 
         if (requestToken !== cardServerAvailabilityCheckToken) {
             return;
         }
 
         await probeCardServerAvailability(context, field72ValueElement, requestToken);
-    }, CARD_SERVER_AVAILABILITY_CHECK_DELAY_MS);
+    }, CARD_SERVER_AVAILABILITY_CHECK_DEBOUNCE_MS);
 };
 
 const ensureCardErrorNode = () => {
@@ -2379,7 +2457,6 @@ const pollCardServerError = async (context, options = {}) => {
 
 // --- Логіка для сторінки з панеллю полів (f-id="72") ---
 (async () => {
-    const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
     const BUTTONS_ID = CARD_BUTTONS_ID;
 
     const getCardScopeRoot = (element) => (
@@ -2404,7 +2481,7 @@ const pollCardServerError = async (context, options = {}) => {
         return serverResolution.context;
     };
 
-    const createLicenseBtn = (label, action, color, scopeRoot) => {
+    const createLicenseBtn = (label, color, scopeRoot) => {
         const btn = document.createElement('button');
         btn.textContent = label;
         btn.style.cssText = `
@@ -2433,18 +2510,7 @@ const pollCardServerError = async (context, options = {}) => {
             invalidateCardErrorPolling();
             clearCardErrorMessage();
 
-            if (action === 'check') {
-                await handleCardLicenseCheck(btn, serverData);
-                return;
-            }
-
-            pollCardServerError(serverData).catch((error) => {
-                console.error('Не вдалося оновити помилку під кнопками ліцензії:', error);
-            });
-
-            const { server, port } = serverData;
-            const portParam = port ? `&port=${encodeURIComponent(port)}` : '';
-            window.open(`${LICENSE_MANAGER_BASE}?server=${encodeURIComponent(server)}${portParam}&action=${action}`, '_blank');
+            await handleCardLicenseCheck(btn, serverData);
         });
         return btn;
     };
@@ -2473,7 +2539,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
-        btn.textContent = ' Вебморда';
+        btn.textContent = 'Веб-морда';
         btn.style.cssText = `
             margin-left: 8px;
             cursor: pointer;
@@ -2520,7 +2586,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createDevicesBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-connections-button';
-        btn.textContent = 'Пристрої';
+        btn.textContent = 'Зайняті ліцензії';
         btn.style.cssText = `
             margin-left: 8px;
             cursor: pointer;
@@ -2560,7 +2626,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createPeriodBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'get-period-button';
-        btn.textContent = 'Період';
+        btn.textContent = 'Відкритий період';
         btn.style.cssText = `
             margin-left: 8px;
             cursor: pointer;
@@ -2636,7 +2702,7 @@ const pollCardServerError = async (context, options = {}) => {
                 gap: 6px;
                 padding: 6px 0 2px 0;
             `;
-            container.appendChild(createLicenseBtn("✓ Перевірити", "check", "#059669", scopeRoot));
+            container.appendChild(createLicenseBtn("✓ Перевірити ліцензії", "#059669", scopeRoot));
             container.appendChild(createRestoBtn(scopeRoot));
             container.appendChild(createDevicesBtn(scopeRoot));
             container.appendChild(createPeriodBtn(scopeRoot));
@@ -2693,321 +2759,4 @@ const pollCardServerError = async (context, options = {}) => {
     document.querySelectorAll('.field-target[f-id="72"]').forEach((serverFieldTarget) => {
         injectPanelButtons(serverFieldTarget);
     });
-})();
-
-// --- Логіка для сторінки-списку довідника: sticky hover-панель масових дій ---
-(() => {
-    const LICENSE_MANAGER_BASE = "https://syrve-license-manager-1038989357415.us-west1.run.app/";
-
-    // Стабільні ідентифікатори колонок Planfix з data-columnid у header DOM.
-    const HEADER_CLIENT = 'Клієнт';
-    const HEADER_SERVER = 'Сервер';
-    const HEADER_PORT   = 'Порт';
-    const HEADER_CHAIN  = 'Chain';
-
-    const COLUMN_IDS = {
-        [HEADER_CLIENT]: '80',
-        [HEADER_SERVER]: '72',
-        [HEADER_PORT]: '74',
-        [HEADER_CHAIN]: '260'
-    };
-
-    const DEFAULT_COL_CLASSES = {
-        [HEADER_CLIENT]: 'td-item-qe-4',
-        [HEADER_SERVER]: 'td-item-qe-6',
-        [HEADER_PORT]: 'td-item-qe-10',
-        [HEADER_CHAIN]: 'td-item-qe-8'
-    };
-
-    const findQeClassSuffix = (element) => {
-        if (!element) return null;
-        const matchedClass = [...element.classList].find((cls) => /(?:^|-)qe-\d+$/.test(cls));
-        if (!matchedClass) return null;
-        const match = matchedClass.match(/qe-(\d+)$/);
-        return match ? match[1] : null;
-    };
-
-    // Знаходить реальний CSS-клас td для колонки через data-columnid у header DOM.
-    const findColClass = (headerText) => {
-        const columnId = COLUMN_IDS[headerText];
-        if (!columnId) return DEFAULT_COL_CLASSES[headerText] || null;
-
-        const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${columnId}"]`)
-            || document.querySelector(`[data-columnid="${columnId}"]`);
-        const headerCell = headerTrigger?.closest('td, th, .td-head');
-        const qeSuffix = findQeClassSuffix(headerCell) || findQeClassSuffix(headerTrigger);
-        if (qeSuffix) return `td-item-qe-${qeSuffix}`;
-
-        return DEFAULT_COL_CLASSES[headerText] || null;
-    };
-
-    // Читати текст ячейки через CSS-клас td та <a>-посилання
-    const cellText = (row, colClass) => {
-        if (!colClass) return '';
-        const td = row.querySelector(`td.${colClass}`);
-        if (!td) return '';
-        const link = td.querySelector('a');
-        return (link ? link.textContent : td.textContent).trim();
-    };
-
-    const resolveServerEntry = (rawServer, rawPort) => {
-        if (!rawServer) return null;
-
-        const serverResolution = resolveCardServerContextFromRawInput(rawServer, rawPort);
-        const serverContext = serverResolution.context;
-        if (!serverContext) return null;
-
-        return serverContext.port
-            ? `${serverContext.server}:${serverContext.port}`
-            : serverContext.server;
-    };
-
-    // Зібрати унікальні пари server:port для групи
-    const collectServers = (colClass, groupValue) => {
-        const rows = document.querySelectorAll('tr.handbook-data-item');
-        const seen = new Set();
-        const result = [];
-        const serverClass = findColClass(HEADER_SERVER);
-        const portClass   = findColClass(HEADER_PORT);
-        rows.forEach(row => {
-            if (cellText(row, colClass) !== groupValue) return;
-            const entry = resolveServerEntry(
-                cellText(row, serverClass),
-                cellText(row, portClass)
-            );
-            if (!entry) return;
-            if (!seen.has(entry)) { seen.add(entry); result.push(entry); }
-        });
-        return result;
-    };
-
-    const collectAllServersOnPage = () => {
-        const rows = document.querySelectorAll('tr.handbook-data-item');
-        const seen = new Set();
-        const result = [];
-        const serverClass = findColClass(HEADER_SERVER);
-        const portClass   = findColClass(HEADER_PORT);
-
-        rows.forEach((row) => {
-            const entry = resolveServerEntry(
-                cellText(row, serverClass),
-                cellText(row, portClass)
-            );
-            if (!entry || seen.has(entry)) return;
-            seen.add(entry);
-            result.push(entry);
-        });
-
-        return result;
-    };
-
-    // --- Floating panel ---
-    const panel = document.createElement('div');
-    panel.id = 'bulk-hover-panel';
-    panel.style.cssText = `
-        position: fixed;
-        z-index: 99999;
-        background: #ffffff;
-        border: 1px solid #d1d5db;
-        border-radius: 10px;
-        box-shadow: 0 6px 24px rgba(0,0,0,0.14);
-        padding: 10px 14px;
-        display: none;
-        flex-direction: column;
-        gap: 8px;
-        min-width: 220px;
-        pointer-events: auto;
-        opacity: 0;
-        transition: opacity 0.15s ease;
-        font-family: inherit;
-        font-size: 12px;
-    `;
-    document.body.appendChild(panel);
-
-    const makeBtn = (label, bg, onClick) => {
-        const btn = document.createElement('button');
-        btn.textContent = label;
-        btn.style.cssText = `
-            cursor: pointer;
-            padding: 3px 10px;
-            border-radius: 5px;
-            border: none;
-            font-weight: 600;
-            font-size: 11px;
-            background: ${bg};
-            color: #fff;
-            transition: opacity 0.15s ease;
-            white-space: nowrap;
-            flex-shrink: 0;
-        `;
-        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.75'; });
-        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
-        btn.addEventListener('click', onClick);
-        return btn;
-    };
-
-    const makeActionRow = (label, value, onOpen) => {
-        const row = document.createElement('div');
-        row.style.cssText = 'display: flex; align-items: center; gap: 6px;';
-
-        const lbl = document.createElement('span');
-        lbl.textContent = `${label}:`;
-        lbl.style.cssText = 'color: #6b7280; font-weight: 500; flex-shrink: 0; min-width: 46px; font-size: 11px;';
-
-        const val = document.createElement('span');
-        val.textContent = value;
-        val.style.cssText = 'font-weight: 600; color: #111827; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-
-        row.appendChild(lbl);
-        row.appendChild(val);
-        row.appendChild(makeBtn('✓ Перевірити', '#059669', () => onOpen('check')));
-        row.appendChild(makeBtn('↻ Оновити',    '#d97706', () => onOpen('update')));
-        return row;
-    };
-
-    const makeGroupRow = (label, value, colClass) => {
-        if (!value) return null;
-
-        return makeActionRow(label, value, (action) => {
-            const servers = collectServers(colClass, value);
-            if (!servers.length) { alert(`Не знайдено серверів для: ${value}`); return; }
-            window.open(`${LICENSE_MANAGER_BASE}?servers=${encodeURIComponent(servers.join(','))}&action=${action}`, '_blank');
-        });
-    };
-
-    const makeAllServersRow = () => {
-        return makeActionRow('Сервери', 'Усі на сторінці', (action) => {
-            const servers = collectAllServersOnPage();
-            if (!servers.length) {
-                alert('Не знайдено серверів на поточній сторінці.');
-                return;
-            }
-
-            window.open(`${LICENSE_MANAGER_BASE}?servers=${encodeURIComponent(servers.join(','))}&action=${action}`, '_blank');
-        });
-    };
-
-    const HOVER_HIDE_DELAY = 1000;
-    let hideTimer = null;
-    let hideAnimationTimer = null;
-    let activeHoverCell = null;
-
-    // Позиціонувати панель під ячейкою, вирівнюючи по лівому краю
-    const positionBelow = (td) => {
-        const rect = td.getBoundingClientRect();
-        const panelW = panel.offsetWidth || 260;
-
-        // вертикально: під ячейкою + 4px
-        let top = rect.bottom + 4;
-
-        // горизонтально: від лівого краю ячейки, з урахуванням меж екрану
-        let left = rect.left;
-        if (left + panelW > window.innerWidth - 8) {
-            left = window.innerWidth - panelW - 8;
-        }
-        left = Math.max(8, left);
-
-        panel.style.top  = `${top}px`;
-        panel.style.left = `${left}px`;
-        panel.style.right = 'auto';
-    };
-
-    const showPanel = (anchorElement, renderRow) => {
-        if (activeHoverCell && activeHoverCell !== anchorElement && panel.style.display !== 'none') {
-            return;
-        }
-
-        clearTimeout(hideTimer);
-        hideTimer = null;
-        clearTimeout(hideAnimationTimer);
-        hideAnimationTimer = null;
-
-        activeHoverCell = anchorElement;
-
-        panel.innerHTML = '';
-        const row = renderRow();
-        if (!row) {
-            activeHoverCell = null;
-            return;
-        }
-        panel.appendChild(row);
-
-        panel.style.display = 'flex';
-        // Позиціонуємо після display:flex, щоб offsetWidth був актуальним
-        requestAnimationFrame(() => {
-            positionBelow(anchorElement);
-            panel.style.opacity = '1';
-        });
-    };
-
-    const hidePanel = (delay = 200) => {
-        clearTimeout(hideTimer);
-        hideTimer = null;
-        hideTimer = setTimeout(() => {
-            hideTimer = null;
-            panel.style.opacity = '0';
-            clearTimeout(hideAnimationTimer);
-            hideAnimationTimer = setTimeout(() => {
-                panel.style.display = 'none';
-                panel.innerHTML = '';
-                activeHoverCell = null;
-                hideAnimationTimer = null;
-            }, 150);
-        }, delay);
-    };
-
-    panel.addEventListener('mouseenter', () => {
-        clearTimeout(hideTimer);
-        hideTimer = null;
-    });
-    panel.addEventListener('mouseleave', () => hidePanel(150));
-
-    // Підвішуємо події на конкретні ячейки (Chain / Клієнт)
-    const COLS = [
-        { headerText: HEADER_CHAIN,  label: 'Chain'   },
-        { headerText: HEADER_CLIENT, label: 'Клієнт' },
-    ];
-
-    const attachCellHover = () => {
-        document.querySelectorAll('tr.handbook-data-item').forEach(row => {
-            COLS.forEach(({ headerText, label }) => {
-                const colClass = findColClass(headerText);
-                if (!colClass) return;
-                const td = row.querySelector(`td.${colClass}`);
-                if (!td || td.dataset.hoverAttached) return;
-                td.dataset.hoverAttached = '1';
-                td.style.cursor = 'default';
-
-                td.addEventListener('mouseenter', () => {
-                    const value = cellText(row, colClass);
-                    showPanel(td, () => makeGroupRow(label, value, colClass));
-                });
-                td.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
-            });
-        });
-    };
-
-    const attachServerHeaderHover = () => {
-        const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${COLUMN_IDS[HEADER_SERVER]}"]`)
-            || document.querySelector(`[data-columnid="${COLUMN_IDS[HEADER_SERVER]}"]`);
-        const hoverTarget = headerTrigger?.closest('td, th, .td-head') || headerTrigger;
-        if (!hoverTarget || hoverTarget.dataset.serverHoverAttached) return;
-
-        hoverTarget.dataset.serverHoverAttached = '1';
-        hoverTarget.style.cursor = 'default';
-
-        hoverTarget.addEventListener('mouseenter', () => {
-            showPanel(hoverTarget, () => makeAllServersRow());
-        });
-        hoverTarget.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
-    };
-
-    const attachHoverTargets = () => {
-        attachCellHover();
-        attachServerHeaderHover();
-    };
-
-    const observer = new MutationObserver(attachHoverTargets);
-    observer.observe(document.body, { childList: true, subtree: true });
-    attachHoverTargets();
 })();

@@ -28,12 +28,7 @@
     "https://*.us-central1.hosted.app/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
-    "https://*.syrve.online/*",
-    "https://*.daocloud.it/*",
-    "http://*.daocloud.fun/*",
-    "https://*.daocloud.fun/*",
-    "https://planfix-to-syrve.com:8000/*",
-    "https://syrve-license-manager-1038989357415.us-west1.run.app/*"
+    "https://planfix-to-syrve.com:8000/*"
   ],
   "background": {
     "service_worker": "background.js",

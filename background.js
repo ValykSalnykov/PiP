@@ -31,11 +31,11 @@ const HEALTH_PERIOD_REQUESTS = new Map();
 const SYRVE_TAB_CREDENTIALS = new Map();
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
-const SERVER_AVAILABILITY_TIMEOUT_MS = 4000;
 const SYRVE_CREDENTIAL_TTL_MS = 120000;
 const EXTENSION_ACCESS_REQUEST_URL = 'http://daologistics.duckdns.org:8100/extension/access/request';
 const EXTENSION_ACCESS_CLAIM_URL = 'http://daologistics.duckdns.org:8100/extension/access/claim';
 const CREDENTIALS_LOOKUP_URL = 'http://daologistics.duckdns.org:8100/credentials/lookup';
+const SERVER_AVAILABILITY_URL = 'http://daologistics.duckdns.org:8100/server/availability';
 const LICENSE_CHECK_URL = 'http://daologistics.duckdns.org:8100/license/check';
 const STORAGE_KEYS = {
   userId: 'userInput',
@@ -177,27 +177,51 @@ function buildCredentialsLookupErrorMessage(status, payload) {
   }
 }
 
-function normalizeLicenseServerAddress(value) {
+function normalizeProtectedServerAddress(value, errorMessage) {
   const normalizedValue = String(value ?? '').trim();
   if (!normalizedValue || /\s/.test(normalizedValue) || normalizedValue.includes('://') || /[/?#@]/.test(normalizedValue)) {
-    throw new Error('Некоректна адреса сервера для перевірки ліцензій.');
+    throw new Error(errorMessage);
   }
 
   return normalizedValue;
 }
 
-function normalizeLicenseServerPort(value) {
+function normalizeProtectedServerPort(value, invalidMessage, outOfRangeMessage) {
   const normalizedValue = String(value ?? '').trim();
   if (!/^\d+$/.test(normalizedValue)) {
-    throw new Error('Некоректний порт сервера для перевірки ліцензій.');
+    throw new Error(invalidMessage);
   }
 
   const parsedPort = Number(normalizedValue);
   if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-    throw new Error('Порт сервера для перевірки ліцензій має бути в межах від 1 до 65535.');
+    throw new Error(outOfRangeMessage);
   }
 
   return parsedPort;
+}
+
+function normalizeLicenseServerAddress(value) {
+  return normalizeProtectedServerAddress(value, 'Некоректна адреса сервера для перевірки ліцензій.');
+}
+
+function normalizeLicenseServerPort(value) {
+  return normalizeProtectedServerPort(
+    value,
+    'Некоректний порт сервера для перевірки ліцензій.',
+    'Порт сервера для перевірки ліцензій має бути в межах від 1 до 65535.'
+  );
+}
+
+function normalizeServerAvailabilityAddress(value) {
+  return normalizeProtectedServerAddress(value, 'Некоректна адреса сервера для перевірки доступності сервера.');
+}
+
+function normalizeServerAvailabilityPort(value) {
+  return normalizeProtectedServerPort(
+    value,
+    'Некоректний порт сервера для перевірки доступності сервера.',
+    'Порт сервера для перевірки доступності сервера має бути в межах від 1 до 65535.'
+  );
 }
 
 function buildLicenseCheckErrorMessage(status, payload) {
@@ -218,6 +242,23 @@ function buildLicenseCheckErrorMessage(status, payload) {
       return 'Syrve не відповів вчасно на перевірку ліцензій.';
     default:
       return serverMessage || `Сервер license check повернув помилку зі статусом ${status}.`;
+  }
+}
+
+function buildServerAvailabilityErrorMessage(status, payload) {
+  const serverMessage = extractServerMessage(payload);
+
+  switch (status) {
+    case 400:
+      return serverMessage || 'Сервер перевірки доступності відхилив адресу або порт.';
+    case 401:
+      return 'Розширення не передало X-Extension-Key для перевірки доступності сервера. Завершіть доступ пристрою у popup.';
+    case 403:
+      return 'Персональний доступ цього пристрою до перевірки доступності сервера недійсний або відкликаний. Попросіть адміністратора видати новий код підтвердження.';
+    case 500:
+      return 'Сервер перевірки доступності не налаштований або має внутрішню помилку.';
+    default:
+      return serverMessage || `Сервер перевірки доступності повернув помилку зі статусом ${status}.`;
   }
 }
 
@@ -657,6 +698,62 @@ async function fetchSyrveLicenseCheck({ address, port }) {
   };
 }
 
+async function fetchServerAvailability({ address, port }) {
+  const { userId, extensionKey } = await getProtectedRouteAuthContext();
+
+  const normalizedAddress = normalizeServerAvailabilityAddress(address);
+  const normalizedPort = normalizeServerAvailabilityPort(port);
+
+  let response;
+  try {
+    response = await fetch(SERVER_AVAILABILITY_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Key': extensionKey,
+        'X-User-Id': userId
+      },
+      body: JSON.stringify({
+        address: normalizedAddress,
+        port: normalizedPort
+      })
+    });
+  } catch (error) {
+    throw new Error('Не вдалося звернутися до сервера перевірки доступності. Перевірте мережу та доступність сервера.');
+  }
+
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 403) {
+      await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
+    }
+
+    throw new Error(buildServerAvailabilityErrorMessage(response.status, payload));
+  }
+
+  const result = payload?.result;
+  if (!result || typeof result !== 'object') {
+    throw new Error('Сервер перевірки доступності повернув некоректну відповідь.');
+  }
+
+  const normalizedResult = {
+    reachable: result.reachable === true,
+    status: Number.isInteger(result.status) ? result.status : null,
+    url: typeof result.url === 'string' && result.url.trim() ? result.url.trim() : ''
+  };
+
+  if (!normalizedResult.url) {
+    throw new Error('Сервер перевірки доступності повернув некоректну відповідь.');
+  }
+
+  if (typeof result.error === 'string' && result.error.trim()) {
+    normalizedResult.error = result.error.trim();
+  }
+
+  return normalizedResult;
+}
+
 function cacheSyrveCredentialsForTab(tabId, credential) {
   if (tabId === undefined) {
     return;
@@ -879,13 +976,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.action === 'PROBE_SERVER_AVAILABILITY') {
-    if (!message.server) {
-      sendResponse({ ok: false, error: 'Missing server' });
+    if (!message.server || message.port === undefined || message.port === null || message.port === '') {
+      sendResponse({ ok: false, error: 'Missing server or port' });
       return false;
     }
 
-    probeServerAvailability({
-      server: message.server,
+    fetchServerAvailability({
+      address: message.server,
       port: message.port
     })
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -1065,41 +1162,6 @@ async function openSyrvePage({ server, path, port, active = true }) {
   });
 
   return createdTab.id;
-}
-
-async function probeServerAvailability({ server, port }) {
-  const url = buildSyrvePageUrl({ server, port, path: '/resto/' });
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SERVER_AVAILABILITY_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-      redirect: 'follow',
-      signal: controller.signal
-    });
-
-    const reachable = response.ok || response.status === 401 || response.status === 403;
-    return {
-      reachable,
-      status: response.status,
-      url
-    };
-  } catch (error) {
-    const isAbortError = error?.name === 'AbortError';
-    return {
-      reachable: false,
-      status: null,
-      url,
-      error: isAbortError
-        ? `Не вдалося дочекатися відповіді від ${url}.`
-        : `Не вдалося підключитися до ${url}.`
-    };
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 function finalizeHealthPeriodRequest(serviceTabId, result) {

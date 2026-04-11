@@ -1,6 +1,20 @@
 const inputField = document.getElementById("inputField");
-const apiKeyField = document.getElementById("apiKeyField");
 const saveButton = document.getElementById("saveButton");
+const requestAccessButton = document.getElementById("requestAccessButton");
+const requestIdGroup = document.getElementById("requestIdGroup");
+const requestIdValue = document.getElementById("requestIdValue");
+const claimFieldGroup = document.getElementById("claimFieldGroup");
+const claimCodeInput = document.getElementById("claimCodeInput");
+const claimAccessButton = document.getElementById("claimAccessButton");
+const cancelAccessSetupButton = document.getElementById("cancelAccessSetupButton");
+const accessSetupCard = document.getElementById("accessSetupCard");
+const accessStatusBadge = document.getElementById("accessStatusBadge");
+const accessIntro = document.getElementById("accessIntro");
+const accessStatusBox = document.getElementById("accessStatusBox");
+const accessStatusTitle = document.getElementById("accessStatusTitle");
+const accessHelpText = document.getElementById("accessHelpText");
+const accessMessage = document.getElementById("accessMessage");
+const mainContent = document.getElementById("mainContent");
 const serverField = document.getElementById("serverField");
 const portField = document.getElementById("portField");
 const sendDataButton = document.getElementById("sendDataButton");
@@ -12,12 +26,15 @@ const inlineServerError = document.getElementById("inlineServerError");
 const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
 const editClientBtn = document.getElementById("editClientBtn");
-const clientSettingsCard = document.getElementById("clientSettingsCard");
 const discoBall = document.getElementById("discoBall");
 
 const STORAGE_KEYS = {
-  clientId: "userInput",
-  apiKey: "credentialsApiKey",
+  userId: "userInput",
+  legacyApiKey: "credentialsApiKey",
+  extensionClientId: "extensionClientId",
+  extensionRequestId: "extensionAccessRequestId",
+  extensionKey: "extensionAccessKey",
+  accessNotice: "extensionAccessNotice",
   discoMode: "discoMode",
   serverContext: "lastServerContext"
 };
@@ -25,8 +42,12 @@ const STORAGE_KEYS = {
 const KNOWN_443_DOMAINS = ["syrve.online", "daocloud.it"];
 const HTTP_ONLY_DOMAINS = ["daocloud.fun"];
 const INLINE_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
+const STATUS_BOX_TONES = ["neutral", "warning", "success", "error"];
+const STATUS_PILL_TONES = ["neutral", "warning", "success"];
 
 let inlineErrorPollToken = 0;
+let popupAccessState = null;
+let isAccessSetupForced = false;
 
 const storageGet = (keys) => new Promise((resolve) => {
   chrome.storage.local.get(keys, (result) => {
@@ -40,7 +61,111 @@ const storageSet = (data) => new Promise((resolve) => {
   });
 });
 
-const isNumericClientId = (value) => /^\d+$/.test((value || "").trim());
+const sendRuntimeMessage = (message) => new Promise((resolve, reject) => {
+  chrome.runtime.sendMessage(message, (response) => {
+    if (chrome.runtime.lastError) {
+      reject(new Error(chrome.runtime.lastError.message));
+      return;
+    }
+
+    if (!response?.ok) {
+      reject(new Error(response?.error || "Помилка обробки запиту розширення."));
+      return;
+    }
+
+    resolve(response);
+  });
+});
+
+const isNumericUserId = (value) => /^\d+$/.test((value || "").trim());
+
+const setButtonBusy = (button, isBusy, busyLabel) => {
+  if (!button) return;
+
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent;
+  }
+
+  button.disabled = isBusy;
+  button.textContent = isBusy ? busyLabel : button.dataset.defaultLabel;
+};
+
+const applyStatusTone = (element, baseClass, tone, tones) => {
+  if (!element) return;
+
+  tones.forEach((value) => {
+    element.classList.remove(`${baseClass}--${value}`);
+  });
+
+  element.classList.add(`${baseClass}--${tone}`);
+};
+
+const setAccessMessage = (message, tone = "neutral") => {
+  if (!accessMessage) return;
+
+  const normalizedMessage = (message || "").trim();
+  accessMessage.textContent = normalizedMessage;
+  accessMessage.classList.toggle("is-hidden", !normalizedMessage);
+  applyStatusTone(accessMessage, "status-box", tone, STATUS_BOX_TONES);
+};
+
+const clearAccessMessage = () => {
+  setAccessMessage("");
+};
+
+const getAccessViewModel = (state, isForced) => {
+  const status = state?.status || "needs-user";
+
+  if (status === "granted") {
+    return {
+      badge: "Доступ активний",
+      badgeTone: "success",
+      boxTone: "success",
+      title: isForced
+        ? "Персональний ключ активний для цього пристрою"
+        : "Персональний ключ отримано",
+      intro: isForced
+        ? "Можна оновити User ID. Якщо ви зміните його, доступ до пристрою потрібно буде запросити заново."
+        : "Пристрій уже має персональний доступ до захищених маршрутів.",
+      help: "Поверніться до інструментів або змініть User ID, якщо доступ треба перевипустити для іншого користувача.",
+      showRequestControls: false
+    };
+  }
+
+  if (status === "awaiting-claim") {
+    return {
+      badge: "Очікує коду",
+      badgeTone: "warning",
+      boxTone: "warning",
+      title: "Запит доступу збережено",
+      intro: "Пристрій уже зареєстровано. Після ручного схвалення в адмінці введіть одноразовий код підтвердження.",
+      help: "Request ID збережено для цього пристрою. Якщо код прострочився, попросіть адміністратора видати новий.",
+      showRequestControls: true
+    };
+  }
+
+  if (status === "ready-to-request") {
+    return {
+      badge: "Готово до запиту",
+      badgeTone: "neutral",
+      boxTone: "neutral",
+      title: "User ID збережено",
+      intro: "Тепер можна надіслати запит на схвалення цього пристрою і дочекатися коду підтвердження від адміністратора.",
+      help: "Після запиту розширення збереже request ID і чекатиме на одноразовий код підтвердження.",
+      showRequestControls: true
+    };
+  }
+
+  return {
+    badge: "Потрібне налаштування",
+    badgeTone: "warning",
+    boxTone: "warning",
+    title: "Спочатку збережіть User ID",
+    intro: "Щоб отримувати логін і пароль Syrve та перевіряти ліцензії, цей пристрій має пройти ручне схвалення в адмінці.",
+    help: "Вкажіть User ID, який уже використовуєте в розширенні. Після цього можна буде запросити доступ для пристрою.",
+    showRequestControls: true
+  };
+};
 
 const splitServerAddressCandidates = (rawAddress) => {
   const normalizedAddress = String(rawAddress || "").trim();
@@ -407,16 +532,16 @@ const isErrorRelevantToServer = (errorText, context) => {
 
 const refreshInlineServerError = async (options = {}) => {
   const { forceShowAnyError = false } = options;
-  const clientId = (await storageGet([STORAGE_KEYS.clientId]))[STORAGE_KEYS.clientId];
+  const userId = (await storageGet([STORAGE_KEYS.userId]))[STORAGE_KEYS.userId];
   const context = getCurrentServerContext();
 
-  if (!clientId || !context?.server) {
+  if (!userId || !context?.server) {
     clearInlineServerError();
     return false;
   }
 
   try {
-    const lastError = await fetchLastError(clientId);
+    const lastError = await fetchLastError(userId);
 
     if (!lastError) {
       clearInlineServerError();
@@ -471,38 +596,131 @@ const updateClientIdUI = (value) => {
   if (hasValue) {
     clientIdBadge.textContent = normalized;
     clientStatus?.classList.remove("is-hidden");
-    clientSettingsCard?.classList.add("card--collapsed");
+    editClientBtn?.classList.remove("is-hidden");
   } else {
     clientIdBadge.textContent = "";
     clientStatus?.classList.add("is-hidden");
-    clientSettingsCard?.classList.remove("card--collapsed");
+    editClientBtn?.classList.add("is-hidden");
   }
 };
 
-// Завантаження Client ID
+const renderAccessState = () => {
+  const state = popupAccessState || {
+    status: "needs-user",
+    userId: "",
+    requestId: "",
+    notice: "",
+    hasExtensionKey: false
+  };
+  const viewModel = getAccessViewModel(state, isAccessSetupForced);
+  const hasGrantedAccess = state.status === "granted";
+  const shouldShowSetup = !hasGrantedAccess || isAccessSetupForced;
+  const helpText = state.notice || viewModel.help;
+
+  updateClientIdUI(state.userId || "");
+  inputField.value = state.userId || "";
+
+  accessSetupCard?.classList.toggle("is-hidden", !shouldShowSetup);
+  mainContent?.classList.toggle("is-hidden", shouldShowSetup);
+
+  if (accessStatusBadge) {
+    accessStatusBadge.textContent = viewModel.badge;
+    applyStatusTone(accessStatusBadge, "status-pill", viewModel.badgeTone, STATUS_PILL_TONES);
+  }
+
+  applyStatusTone(accessStatusBox, "status-box", viewModel.boxTone, STATUS_BOX_TONES);
+
+  if (accessIntro) {
+    accessIntro.textContent = viewModel.intro;
+  }
+
+  if (accessStatusTitle) {
+    accessStatusTitle.textContent = viewModel.title;
+  }
+
+  if (accessHelpText) {
+    accessHelpText.textContent = helpText;
+  }
+
+  const shouldShowRequestControls = viewModel.showRequestControls;
+  requestAccessButton?.classList.toggle("is-hidden", !shouldShowRequestControls);
+  requestAccessButton.disabled = !state.userId;
+  if (requestAccessButton?.dataset.defaultLabel) {
+    requestAccessButton.dataset.defaultLabel = state.requestId ? "Оновити запит доступу" : "Запросити доступ до пристрою";
+  }
+  requestAccessButton.textContent = state.requestId ? "Оновити запит доступу" : "Запросити доступ до пристрою";
+
+  requestIdGroup?.classList.toggle("is-hidden", !shouldShowRequestControls || !state.requestId);
+  if (requestIdValue) {
+    requestIdValue.textContent = state.requestId || "";
+  }
+
+  const shouldShowClaimControls = shouldShowRequestControls && Boolean(state.requestId);
+  claimFieldGroup?.classList.toggle("is-hidden", !shouldShowClaimControls);
+  claimAccessButton?.classList.toggle("is-hidden", !shouldShowClaimControls);
+  if (claimAccessButton) {
+    claimAccessButton.disabled = !shouldShowClaimControls;
+  }
+
+  if (!state.requestId && claimCodeInput) {
+    claimCodeInput.value = "";
+  }
+
+  cancelAccessSetupButton?.classList.toggle("is-hidden", !(hasGrantedAccess && isAccessSetupForced));
+};
+
+const fetchExtensionAccessState = async () => {
+  const response = await sendRuntimeMessage({ action: "GET_EXTENSION_ACCESS_STATE" });
+  popupAccessState = response.state;
+  return popupAccessState;
+};
+
+const persistUserId = async () => {
+  const userId = inputField.value.trim();
+
+  if (!userId) {
+    throw new Error("Вкажіть User ID.");
+  }
+
+  if (!isNumericUserId(userId)) {
+    throw new Error("User ID має містити лише цифри.");
+  }
+
+  const response = await sendRuntimeMessage({
+    action: "SAVE_EXTENSION_USER_ID",
+    userId
+  });
+  popupAccessState = response.state;
+  return popupAccessState;
+};
+
+// Завантаження popup state
 (async () => {
   const result = await storageGet([
-    STORAGE_KEYS.clientId,
-    STORAGE_KEYS.apiKey,
     STORAGE_KEYS.discoMode,
     STORAGE_KEYS.serverContext
   ]);
-  const stored = result[STORAGE_KEYS.clientId] || "";
-  const storedApiKey = result[STORAGE_KEYS.apiKey] || "";
   const discoMode = result[STORAGE_KEYS.discoMode] || false;
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
 
-  if (stored) {
-    inputField.value = stored;
-    updateClientIdUI(stored);
-    fetchMode(stored);
-  } else {
-    updateClientIdUI("");
+  try {
+    const accessState = await fetchExtensionAccessState();
+    if (accessState.userId) {
+      fetchMode(accessState.userId);
+    } else {
+      modeInfo.textContent = "Збережіть User ID, щоб отримати режим.";
+    }
+  } catch (error) {
+    popupAccessState = {
+      status: "needs-user",
+      userId: "",
+      requestId: "",
+      notice: ""
+    };
+    setAccessMessage(error?.message || "Не вдалося отримати стан доступу розширення.", "error");
   }
 
-  if (apiKeyField) {
-    apiKeyField.value = storedApiKey;
-  }
+  renderAccessState();
 
   restoreServerContext(serverContext);
 
@@ -514,37 +732,98 @@ const updateClientIdUI = (value) => {
 })();
 
 editClientBtn?.addEventListener("click", () => {
-  clientSettingsCard?.classList.remove("card--collapsed");
-  clientStatus?.classList.add("is-hidden");
+  isAccessSetupForced = true;
+  clearAccessMessage();
+  renderAccessState();
   inputField.focus();
   inputField.select();
 });
 
-// Збереження Client ID
-saveButton.addEventListener("click", () => {
-  const inputValue = inputField.value.trim();
-  if (!inputValue) {
-    alert("Please, input Client ID.");
-    return;
-  }
+cancelAccessSetupButton?.addEventListener("click", async () => {
+  isAccessSetupForced = false;
+  clearAccessMessage();
+  await fetchExtensionAccessState();
+  renderAccessState();
+});
 
-  if (!isNumericClientId(inputValue)) {
-    alert("Client ID must contain digits only.");
+saveButton?.addEventListener("click", async () => {
+  setButtonBusy(saveButton, true, "Зберігаю...");
+  clearAccessMessage();
+
+  try {
+    const nextState = await persistUserId();
+    if (nextState.userId) {
+      fetchMode(nextState.userId);
+    }
+
+    if (nextState.status === "granted") {
+      isAccessSetupForced = false;
+    }
+
+    renderAccessState();
+    setAccessMessage(
+      nextState.status === "granted"
+        ? "User ID оновлено. Поточний персональний доступ збережено."
+        : "User ID збережено. Тепер можна запросити доступ для пристрою.",
+      "success"
+    );
+  } catch (error) {
+    setAccessMessage(error?.message || "Не вдалося зберегти User ID.", "error");
     inputField.focus();
     inputField.select();
+  } finally {
+    setButtonBusy(saveButton, false, "Зберігаю...");
+  }
+});
+
+requestAccessButton?.addEventListener("click", async () => {
+  setButtonBusy(requestAccessButton, true, "Надсилаю запит...");
+  clearAccessMessage();
+
+  try {
+    const savedState = await persistUserId();
+    popupAccessState = savedState;
+    const response = await sendRuntimeMessage({ action: "REQUEST_EXTENSION_ACCESS" });
+    popupAccessState = response.state;
+    renderAccessState();
+    setAccessMessage(
+      popupAccessState.notice || "Запит на доступ до пристрою збережено. Після схвалення введіть код підтвердження.",
+      "warning"
+    );
+  } catch (error) {
+    setAccessMessage(error?.message || "Не вдалося запросити доступ для пристрою.", "error");
+  } finally {
+    setButtonBusy(requestAccessButton, false, "Надсилаю запит...");
+  }
+});
+
+claimAccessButton?.addEventListener("click", async () => {
+  const claimCode = claimCodeInput?.value.trim() || "";
+  if (!claimCode) {
+    setAccessMessage("Введіть код підтвердження від адміністратора.", "error");
+    claimCodeInput?.focus();
     return;
   }
 
-  const apiKeyValue = apiKeyField?.value.trim() || "";
+  setButtonBusy(claimAccessButton, true, "Активую...");
+  clearAccessMessage();
 
-  chrome.storage.local.set({
-    [STORAGE_KEYS.clientId]: inputValue,
-    [STORAGE_KEYS.apiKey]: apiKeyValue
-  }, () => {
-    updateClientIdUI(inputValue);
-    alert("Settings saved!");
-    window.close();
-  });
+  try {
+    const response = await sendRuntimeMessage({
+      action: "CLAIM_EXTENSION_ACCESS",
+      requestId: popupAccessState?.requestId,
+      claimCode
+    });
+    popupAccessState = response.state;
+    isAccessSetupForced = false;
+    claimCodeInput.value = "";
+    renderAccessState();
+    alert("Персональний доступ для цього пристрою активовано.");
+  } catch (error) {
+    setAccessMessage(error?.message || "Не вдалося активувати персональний доступ.", "error");
+  } finally {
+    setButtonBusy(claimAccessButton, false, "Активую...");
+  }
 });
 
 // Автовибір порту
@@ -564,10 +843,10 @@ portField.addEventListener("input", () => {
 
 // Одноразове відправлення даних
 sendDataButton.addEventListener("click", () => {
-  chrome.storage.local.get([STORAGE_KEYS.clientId], async (result) => {
-    const clientId = result[STORAGE_KEYS.clientId];
-    if (!clientId) {
-      alert("Please save your Client ID first.");
+  chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
+    const userId = result[STORAGE_KEYS.userId];
+    if (!userId) {
+      alert("Спочатку збережіть User ID.");
       return;
     }
 
@@ -586,7 +865,7 @@ sendDataButton.addEventListener("click", () => {
       return;
     }
 
-    const payload = { address: server, port: port, client_id: clientId };
+    const payload = { address: server, port: port, client_id: userId };
 
     try {
       const response = await fetch("https://planfix-to-syrve.com:8000/send_data/", {
@@ -641,10 +920,10 @@ const fetchMode = async (clientId) => {
 
 // Перемикання режиму
 toggleModeButton.addEventListener("click", async () => {
-  chrome.storage.local.get(['userInput'], async (result) => {
-    const clientId = result.userInput;
+  chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
+    const clientId = result[STORAGE_KEYS.userId];
     if (!clientId) {
-      alert("Please save your Client ID first.");
+      alert("Спочатку збережіть User ID.");
       return;
     }
 
@@ -670,10 +949,10 @@ toggleModeButton.addEventListener("click", async () => {
 
 // Показати останню помилку
 showErrorButton.addEventListener("click", async () => {
-  chrome.storage.local.get([STORAGE_KEYS.clientId], async (result) => {
-    const clientId = result[STORAGE_KEYS.clientId];
+  chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
+    const clientId = result[STORAGE_KEYS.userId];
     if (!clientId) {
-      errorMessage.textContent = "Будь ласка, збережіть Client ID спочатку.";
+      errorMessage.textContent = "Будь ласка, збережіть User ID спочатку.";
       return;
     }
 

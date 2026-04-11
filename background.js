@@ -33,11 +33,17 @@ const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
 const SERVER_AVAILABILITY_TIMEOUT_MS = 4000;
 const SYRVE_CREDENTIAL_TTL_MS = 120000;
+const EXTENSION_ACCESS_REQUEST_URL = 'http://daologistics.duckdns.org:8100/extension/access/request';
+const EXTENSION_ACCESS_CLAIM_URL = 'http://daologistics.duckdns.org:8100/extension/access/claim';
 const CREDENTIALS_LOOKUP_URL = 'http://daologistics.duckdns.org:8100/credentials/lookup';
 const LICENSE_CHECK_URL = 'http://daologistics.duckdns.org:8100/license/check';
 const STORAGE_KEYS = {
-  clientId: 'userInput',
-  apiKey: 'credentialsApiKey'
+  userId: 'userInput',
+  legacyApiKey: 'credentialsApiKey',
+  extensionClientId: 'extensionClientId',
+  extensionRequestId: 'extensionAccessRequestId',
+  extensionKey: 'extensionAccessKey',
+  accessNotice: 'extensionAccessNotice'
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -91,27 +97,77 @@ function storageGet(keys) {
   });
 }
 
-function normalizeCredentialId(value) {
-  const normalizedValue = String(value ?? '').trim();
-  if (!/^\d+$/.test(normalizedValue)) {
-    throw new Error('Client ID має бути числовим, щоб отримати логін та пароль.');
+function storageSet(data) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set(data, () => {
+      resolve();
+    });
+  });
+}
+
+function storageRemove(keys) {
+  const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : [keys].filter(Boolean);
+  if (!normalizedKeys.length) {
+    return Promise.resolve();
   }
 
-  return Number(normalizedValue);
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(normalizedKeys, () => {
+      resolve();
+    });
+  });
+}
+
+async function readJsonResponse(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+}
+
+function extractServerMessage(payload) {
+  if (typeof payload?.error === 'string' && payload.error.trim()) {
+    return payload.error.trim();
+  }
+
+  if (typeof payload?.message === 'string' && payload.message.trim()) {
+    return payload.message.trim();
+  }
+
+  return '';
+}
+
+function normalizeUserId(value) {
+  const normalizedValue = String(value ?? '').trim();
+
+  if (!normalizedValue) {
+    throw new Error('Вкажіть User ID у popup розширення.');
+  }
+
+  if (!/^\d+$/.test(normalizedValue)) {
+    throw new Error('User ID має містити лише цифри.');
+  }
+
+  return normalizedValue;
+}
+
+function normalizeCredentialId(value) {
+  return Number(normalizeUserId(value));
 }
 
 function buildCredentialsLookupErrorMessage(status, payload) {
-  const serverMessage = typeof payload?.error === 'string' ? payload.error.trim() : '';
+  const serverMessage = extractServerMessage(payload);
 
   switch (status) {
     case 400:
-      return serverMessage || 'Сервер credentials відхилив Client ID. Перевірте, що він числовий.';
+      return serverMessage || 'Сервер credentials відхилив User ID. Перевірте, що він числовий.';
     case 401:
-      return 'Розширення не передало X-API-Key для отримання логіна та пароля.';
+      return 'Розширення не передало X-Extension-Key для отримання логіна та пароля. Завершіть доступ пристрою у popup.';
     case 403:
-      return 'X-API-Key для credentials API неправильний.';
+      return 'Персональний доступ цього пристрою до credentials недійсний або відкликаний. Попросіть адміністратора видати новий код підтвердження.';
     case 404:
-      return 'Для цього Client ID не знайдено логін і пароль.';
+      return 'Для цього User ID не знайдено логін і пароль.';
     case 503:
       return 'Сервер credentials не налаштований.';
     case 500:
@@ -145,19 +201,15 @@ function normalizeLicenseServerPort(value) {
 }
 
 function buildLicenseCheckErrorMessage(status, payload) {
-  const serverMessage = typeof payload?.error === 'string'
-    ? payload.error.trim()
-    : typeof payload?.message === 'string'
-      ? payload.message.trim()
-      : '';
+  const serverMessage = extractServerMessage(payload);
 
   switch (status) {
     case 400:
       return serverMessage || 'Сервер license check відхилив адресу або порт.';
     case 401:
-      return 'Розширення не передало X-API-Key для перевірки ліцензій.';
+      return 'Розширення не передало X-Extension-Key для перевірки ліцензій. Завершіть доступ пристрою у popup.';
     case 403:
-      return 'X-API-Key для license check неправильний.';
+      return 'Персональний доступ цього пристрою до license check недійсний або відкликаний. Попросіть адміністратора видати новий код підтвердження.';
     case 500:
       return 'Сервер license check не налаштований або має внутрішню помилку.';
     case 502:
@@ -167,6 +219,290 @@ function buildLicenseCheckErrorMessage(status, payload) {
     default:
       return serverMessage || `Сервер license check повернув помилку зі статусом ${status}.`;
   }
+}
+
+function extractRequestId(payload) {
+  return String(payload?.request?.requestId ?? payload?.requestId ?? '').trim();
+}
+
+function buildAccessRequestErrorMessage(status, payload) {
+  const serverMessage = extractServerMessage(payload);
+
+  switch (status) {
+    case 400:
+      return serverMessage || 'Сервер доступу відхилив User ID або дані пристрою.';
+    default:
+      return serverMessage || `Сервер доступу повернув помилку зі статусом ${status}.`;
+  }
+}
+
+function buildAccessClaimErrorMessage(status, payload) {
+  const serverMessage = extractServerMessage(payload);
+
+  switch (status) {
+    case 400:
+      return serverMessage || 'Request ID або код підтвердження мають некоректний формат.';
+    case 403:
+      return 'Код підтвердження неправильний. Перевірте код або зверніться до адміністратора.';
+    case 404:
+      return 'Запит доступу не знайдено. Спробуйте запросити доступ для пристрою ще раз.';
+    case 409:
+      return 'Пристрій ще не схвалено в адмінці. Дочекайтеся підтвердження адміністратора.';
+    case 410:
+      return 'Код підтвердження прострочений або вже використаний. Попросіть адміністратора видати новий код.';
+    default:
+      return serverMessage || `Сервер claim повернув помилку зі статусом ${status}.`;
+  }
+}
+
+function buildAccessRequestNotice(status) {
+  if (status === 200) {
+    return 'Запит для цього пристрою знайдено. Якщо адміністратор уже видав код підтвердження, введіть його у popup.';
+  }
+
+  return 'Запит на доступ до пристрою збережено. Після ручного схвалення введіть код підтвердження у popup.';
+}
+
+function getBrowserLabel() {
+  const userAgent = navigator.userAgent || '';
+
+  if (/Edg\//.test(userAgent)) return 'Edge';
+  if (/Chrome\//.test(userAgent)) return 'Chrome';
+  if (/Firefox\//.test(userAgent)) return 'Firefox';
+  if (/Safari\//.test(userAgent) && !/Chrome\//.test(userAgent)) return 'Safari';
+
+  return 'Browser';
+}
+
+function getDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || 'Unknown device';
+  return `${getBrowserLabel()} on ${platform}`;
+}
+
+function buildExtensionAccessState(storageData) {
+  const userId = String(storageData?.[STORAGE_KEYS.userId] ?? '').trim();
+  const clientId = String(storageData?.[STORAGE_KEYS.extensionClientId] ?? '').trim();
+  const requestId = String(storageData?.[STORAGE_KEYS.extensionRequestId] ?? '').trim();
+  const extensionKey = String(storageData?.[STORAGE_KEYS.extensionKey] ?? '').trim();
+  const notice = String(storageData?.[STORAGE_KEYS.accessNotice] ?? '').trim();
+
+  let status = 'needs-user';
+  if (userId) {
+    status = extensionKey ? 'granted' : requestId ? 'awaiting-claim' : 'ready-to-request';
+  }
+
+  return {
+    status,
+    userId,
+    clientId,
+    requestId,
+    hasExtensionKey: Boolean(extensionKey),
+    notice
+  };
+}
+
+async function getExtensionAccessState() {
+  const storageData = await storageGet([
+    STORAGE_KEYS.userId,
+    STORAGE_KEYS.extensionClientId,
+    STORAGE_KEYS.extensionRequestId,
+    STORAGE_KEYS.extensionKey,
+    STORAGE_KEYS.accessNotice
+  ]);
+
+  return buildExtensionAccessState(storageData);
+}
+
+function clearAllSyrveCredentials() {
+  SYRVE_TAB_CREDENTIALS.clear();
+}
+
+async function saveUserId(rawUserId) {
+  const userId = normalizeUserId(rawUserId);
+  const storageData = await storageGet([STORAGE_KEYS.userId]);
+  const previousUserId = String(storageData[STORAGE_KEYS.userId] ?? '').trim();
+  const hasChanged = previousUserId !== userId;
+
+  await storageSet({
+    [STORAGE_KEYS.userId]: userId
+  });
+
+  const keysToRemove = [STORAGE_KEYS.legacyApiKey];
+  if (hasChanged) {
+    keysToRemove.push(
+      STORAGE_KEYS.extensionRequestId,
+      STORAGE_KEYS.extensionKey,
+      STORAGE_KEYS.accessNotice
+    );
+  }
+
+  await storageRemove([...new Set(keysToRemove)]);
+
+  if (hasChanged) {
+    clearAllSyrveCredentials();
+  }
+
+  if (previousUserId && hasChanged) {
+    await storageSet({
+      [STORAGE_KEYS.accessNotice]: 'User ID змінено. Для цього пристрою потрібно запросити доступ повторно.'
+    });
+  }
+
+  return getExtensionAccessState();
+}
+
+async function getOrCreateClientId() {
+  const storageData = await storageGet([STORAGE_KEYS.extensionClientId]);
+  const storedClientId = String(storageData[STORAGE_KEYS.extensionClientId] ?? '').trim();
+
+  if (storedClientId) {
+    return storedClientId;
+  }
+
+  const clientId = crypto.randomUUID();
+  await storageSet({
+    [STORAGE_KEYS.extensionClientId]: clientId
+  });
+
+  return clientId;
+}
+
+async function requestExtensionAccess(rawUserId) {
+  let userId = '';
+  if (rawUserId !== undefined) {
+    const nextState = await saveUserId(rawUserId);
+    userId = nextState.userId;
+  } else {
+    const storageData = await storageGet([STORAGE_KEYS.userId]);
+    userId = normalizeUserId(storageData[STORAGE_KEYS.userId]);
+  }
+
+  const clientId = await getOrCreateClientId();
+  const deviceName = getDeviceName();
+  let response;
+
+  try {
+    response = await fetch(EXTENSION_ACCESS_REQUEST_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        userId,
+        clientId,
+        deviceName
+      })
+    });
+  } catch (error) {
+    throw new Error('Не вдалося звернутися до сервера доступу. Перевірте мережу та доступність сервера.');
+  }
+
+  const payload = await readJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(buildAccessRequestErrorMessage(response.status, payload));
+  }
+
+  const requestId = extractRequestId(payload);
+  if (!requestId) {
+    throw new Error('Сервер доступу не повернув requestId.');
+  }
+
+  await storageSet({
+    [STORAGE_KEYS.extensionClientId]: clientId,
+    [STORAGE_KEYS.extensionRequestId]: requestId,
+    [STORAGE_KEYS.accessNotice]: buildAccessRequestNotice(response.status)
+  });
+  await storageRemove([STORAGE_KEYS.legacyApiKey]);
+  clearAllSyrveCredentials();
+
+  return getExtensionAccessState();
+}
+
+async function claimExtensionKey({ requestId, claimCode }) {
+  const storageData = await storageGet([STORAGE_KEYS.extensionRequestId]);
+  const normalizedRequestId = String(requestId ?? storageData[STORAGE_KEYS.extensionRequestId] ?? '').trim();
+  const normalizedClaimCode = String(claimCode ?? '').trim();
+
+  if (!normalizedRequestId) {
+    throw new Error('Спочатку запросіть доступ для пристрою, щоб отримати request ID.');
+  }
+
+  if (!normalizedClaimCode) {
+    throw new Error('Введіть код підтвердження від адміністратора.');
+  }
+
+  let response;
+  try {
+    response = await fetch(EXTENSION_ACCESS_CLAIM_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        requestId: normalizedRequestId,
+        claimCode: normalizedClaimCode
+      })
+    });
+  } catch (error) {
+    throw new Error('Не вдалося звернутися до сервера підтвердження доступу. Перевірте мережу та доступність сервера.');
+  }
+
+  const payload = await readJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(buildAccessClaimErrorMessage(response.status, payload));
+  }
+
+  const extensionKey = String(payload?.extensionKey ?? '').trim();
+  if (!extensionKey) {
+    throw new Error('Сервер підтвердження не повернув персональний ключ доступу.');
+  }
+
+  await storageSet({
+    [STORAGE_KEYS.extensionRequestId]: extractRequestId(payload) || normalizedRequestId,
+    [STORAGE_KEYS.extensionKey]: extensionKey,
+    [STORAGE_KEYS.accessNotice]: 'Персональний доступ для цього пристрою активовано.'
+  });
+  await storageRemove([STORAGE_KEYS.legacyApiKey]);
+  clearAllSyrveCredentials();
+
+  return getExtensionAccessState();
+}
+
+async function clearInvalidExtensionKey(message) {
+  await storageRemove([STORAGE_KEYS.extensionKey, STORAGE_KEYS.accessNotice]);
+
+  if (message) {
+    await storageSet({
+      [STORAGE_KEYS.accessNotice]: message
+    });
+  }
+
+  clearAllSyrveCredentials();
+}
+
+async function getProtectedRouteAuthContext() {
+  const storageData = await storageGet([
+    STORAGE_KEYS.userId,
+    STORAGE_KEYS.extensionRequestId,
+    STORAGE_KEYS.extensionKey
+  ]);
+  const userId = normalizeUserId(storageData[STORAGE_KEYS.userId]);
+  const requestId = String(storageData[STORAGE_KEYS.extensionRequestId] ?? '').trim();
+  const extensionKey = String(storageData[STORAGE_KEYS.extensionKey] ?? '').trim();
+
+  if (!extensionKey) {
+    if (requestId) {
+      throw new Error('Пристрій ще не активовано. Відкрийте popup розширення та введіть код підтвердження від адміністратора.');
+    }
+
+    throw new Error('Спочатку запросіть доступ для пристрою у popup розширення.');
+  }
+
+  return {
+    userId,
+    requestId,
+    extensionKey
+  };
 }
 
 function sanitizeLicenseCheckServer(server) {
@@ -232,20 +568,8 @@ function sanitizeLicenseCheckLicenses(licenses) {
 }
 
 async function fetchSyrveCredentials() {
-  const storageData = await storageGet([STORAGE_KEYS.clientId, STORAGE_KEYS.apiKey]);
-  const clientId = storageData[STORAGE_KEYS.clientId];
-  const normalizedClientId = String(clientId ?? '').trim();
-  const apiKey = String(storageData[STORAGE_KEYS.apiKey] ?? '').trim();
-
-  if (!normalizedClientId) {
-    throw new Error('Спочатку збережіть Client ID у popup розширення.');
-  }
-
-  if (!apiKey) {
-    throw new Error('Спочатку збережіть X-API-Key у popup розширення.');
-  }
-
-  const credentialId = normalizeCredentialId(normalizedClientId);
+  const { userId, extensionKey } = await getProtectedRouteAuthContext();
+  const credentialId = normalizeCredentialId(userId);
   let response;
 
   try {
@@ -253,8 +577,8 @@ async function fetchSyrveCredentials() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-        'X-User-Id': normalizedClientId
+        'X-Extension-Key': extensionKey,
+        'X-User-Id': userId
       },
       body: JSON.stringify({ id: credentialId })
     });
@@ -262,14 +586,13 @@ async function fetchSyrveCredentials() {
     throw new Error('Не вдалося звернутися до сервера credentials. Перевірте мережу та доступність сервера.');
   }
 
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch (error) {
-    payload = null;
-  }
+  const payload = await readJsonResponse(response);
 
   if (!response.ok) {
+    if (response.status === 403) {
+      await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
+    }
+
     throw new Error(buildCredentialsLookupErrorMessage(response.status, payload));
   }
 
@@ -286,17 +609,7 @@ async function fetchSyrveCredentials() {
 }
 
 async function fetchSyrveLicenseCheck({ address, port }) {
-  const storageData = await storageGet([STORAGE_KEYS.clientId, STORAGE_KEYS.apiKey]);
-  const clientId = String(storageData[STORAGE_KEYS.clientId] ?? '').trim();
-  const apiKey = String(storageData[STORAGE_KEYS.apiKey] ?? '').trim();
-
-  if (!clientId) {
-    throw new Error('Спочатку збережіть User ID у popup розширення.');
-  }
-
-  if (!apiKey) {
-    throw new Error('Спочатку збережіть X-API-Key у popup розширення.');
-  }
+  const { userId, extensionKey } = await getProtectedRouteAuthContext();
 
   const normalizedAddress = normalizeLicenseServerAddress(address);
   const normalizedPort = normalizeLicenseServerPort(port);
@@ -307,8 +620,8 @@ async function fetchSyrveLicenseCheck({ address, port }) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-        'X-User-Id': clientId
+        'X-Extension-Key': extensionKey,
+        'X-User-Id': userId
       },
       body: JSON.stringify({
         address: normalizedAddress,
@@ -319,14 +632,13 @@ async function fetchSyrveLicenseCheck({ address, port }) {
     throw new Error('Не вдалося звернутися до сервера перевірки ліцензій. Перевірте мережу та доступність сервера.');
   }
 
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch (error) {
-    payload = null;
-  }
+  const payload = await readJsonResponse(response);
 
   if (!response.ok) {
+    if (response.status === 403) {
+      await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
+    }
+
     throw new Error(buildLicenseCheckErrorMessage(response.status, payload));
   }
 
@@ -478,6 +790,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then((tabId) => sendResponse({ ok: true, tabId }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open Syrve page' }));
+
+    return true;
+  }
+
+  if (message?.action === 'GET_EXTENSION_ACCESS_STATE') {
+    getExtensionAccessState()
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to read extension access state' }));
+
+    return true;
+  }
+
+  if (message?.action === 'SAVE_EXTENSION_USER_ID') {
+    saveUserId(message.userId)
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to save user id' }));
+
+    return true;
+  }
+
+  if (message?.action === 'REQUEST_EXTENSION_ACCESS') {
+    requestExtensionAccess(message.userId)
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to request extension access' }));
+
+    return true;
+  }
+
+  if (message?.action === 'CLAIM_EXTENSION_ACCESS') {
+    claimExtensionKey({
+      requestId: message.requestId,
+      claimCode: message.claimCode
+    })
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to claim extension access' }));
 
     return true;
   }

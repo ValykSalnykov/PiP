@@ -18,7 +18,7 @@
       font-family: "Inter", "Segoe UI", Arial, sans-serif;
       background: #f6f7fb;
       color: #111827;
-      overflow: hidden;
+      overflow-y: auto;
     }
 
     .popup {
@@ -29,6 +29,15 @@
       gap: 10px;
       box-shadow: 0 16px 28px rgba(79, 70, 229, 0.08);
       border: 1px solid rgba(79, 70, 229, 0.1);
+    }
+
+    .popup__main {
+      display: grid;
+      gap: 10px;
+    }
+
+    .is-hidden {
+      display: none !important;
     }
 
     .popup__header {
@@ -133,6 +142,13 @@
       background: rgba(255, 255, 255, 0.92);
     }
 
+    .card--hero {
+      background:
+        radial-gradient(circle at top right, rgba(191, 219, 254, 0.9), transparent 42%),
+        linear-gradient(160deg, rgba(238, 242, 255, 0.92), rgba(255, 255, 255, 0.98));
+      border-color: rgba(59, 130, 246, 0.18);
+    }
+
     .card--collapsed {
       display: none;
     }
@@ -179,6 +195,7 @@
       margin: 0;
       font-size: 0.7rem;
       color: #9ca3af;
+      line-height: 1.45;
     }
 
     .fields-inline {
@@ -211,6 +228,13 @@
       box-shadow: 0 6px 12px rgba(67, 56, 202, 0.16);
     }
 
+    .button:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+      transform: none;
+      box-shadow: none;
+    }
+
     .button--secondary {
       background: rgba(79, 70, 229, 0.12);
       color: #4338ca;
@@ -225,6 +249,13 @@
     .card__actions {
       display: grid;
       gap: 8px;
+    }
+
+    .card__lead {
+      margin: 0;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      color: #1f2937;
     }
 
     .card__divider {
@@ -270,6 +301,104 @@
       background: #b45309;
       transform: translateY(-1px);
       box-shadow: 0 10px 20px rgba(180, 83, 9, 0.2);
+    }
+
+    .popup__hero-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .status-pill--neutral {
+      background: rgba(71, 85, 105, 0.12);
+      color: #334155;
+    }
+
+    .status-pill--warning {
+      background: rgba(217, 119, 6, 0.12);
+      color: #92400e;
+    }
+
+    .status-pill--success {
+      background: rgba(5, 150, 105, 0.12);
+      color: #065f46;
+    }
+
+    .status-box {
+      display: grid;
+      gap: 4px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(71, 85, 105, 0.16);
+      background: rgba(248, 250, 252, 0.96);
+      color: #0f172a;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .status-box--neutral {
+      background: rgba(241, 245, 249, 0.92);
+      border-color: rgba(148, 163, 184, 0.28);
+      color: #334155;
+    }
+
+    .status-box--warning {
+      background: rgba(255, 247, 237, 0.96);
+      border-color: rgba(251, 146, 60, 0.28);
+      color: #9a3412;
+    }
+
+    .status-box--success {
+      background: rgba(236, 253, 245, 0.96);
+      border-color: rgba(16, 185, 129, 0.24);
+      color: #065f46;
+    }
+
+    .status-box--error {
+      background: rgba(254, 242, 242, 0.96);
+      border-color: rgba(248, 113, 113, 0.26);
+      color: #991b1b;
+    }
+
+    .status-box__title,
+    .status-box__text {
+      margin: 0;
+    }
+
+    .status-box__title {
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .status-box__text {
+      font-size: 0.76rem;
+      line-height: 1.45;
+    }
+
+    .readonly-box {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px dashed rgba(79, 70, 229, 0.28);
+      background: rgba(238, 242, 255, 0.96);
+      color: #312e81;
+      font-size: 0.78rem;
+      font-weight: 600;
+      word-break: break-all;
     }
 
     #modeInfo {
@@ -325,48 +454,70 @@
       </div>
     </header>
 
-    <section class="card" aria-labelledby="client-settings" id="clientSettingsCard">
-      <h2 id="client-settings" class="card__title">Ідентифікатор користувача</h2>
-      <div class="field">
-        <input type="text" id="inputField" placeholder="Введіть Client ID">
+    <section class="card card--hero" aria-labelledby="device-access" id="accessSetupCard">
+      <div class="popup__hero-header">
+        <h2 id="device-access" class="card__title">Персональний доступ</h2>
+        <span id="accessStatusBadge" class="status-pill status-pill--warning">Налаштування</span>
+      </div>
+      <p id="accessIntro" class="card__lead">Щоб отримувати логін і пароль Syrve та перевіряти ліцензії, цей пристрій має пройти ручне схвалення в адмінці.</p>
+      <div id="accessStatusBox" class="status-box status-box--neutral">
+        <p id="accessStatusTitle" class="status-box__title">Спочатку збережіть User ID</p>
+        <p id="accessHelpText" class="status-box__text">Той самий стабільний ідентифікатор користувача, який уже використовує розширення.</p>
       </div>
       <div class="field">
-        <label for="apiKeyField">X-API-Key</label>
-        <input type="password" id="apiKeyField" placeholder="Введіть ключ доступу до credentials API" autocomplete="off">
-        <p class="field__note">Поточний Client ID також використовується як numeric id для отримання логіна та пароля.</p>
+        <label for="inputField">User ID</label>
+        <input type="text" id="inputField" placeholder="Введіть User ID" autocomplete="off">
       </div>
-      <button id="saveButton" class="button">Зберегти налаштування</button>
-    </section>
-
-    <section class="card" aria-labelledby="one-time">
-      <h2 id="one-time" class="card__title">Ручне відкриття сервера</h2>
-      <div class="fields-inline">
-        <div class="field">
-          <label for="serverField">Сервер</label>
-          <input type="text" id="serverField" placeholder="Адрес сервера">
-        </div>
-        <div class="field">
-          <label for="portField">Порт</label>
-          <input type="text" id="portField" placeholder="Номер порта">
-        </div>
-      </div>
-      <button id="sendDataButton" class="button">Відкрити Backoffice / Chain</button>
-      <div id="inlineServerError" class="inline-server-error" aria-live="polite"></div>
-    </section>
-
-    <section class="card" aria-labelledby="mode-management">
-      <h2 id="mode-management" class="card__title">Режим</h2>
-      <p id="modeInfo">Завантаження даних...</p>
-      <button id="toggleModeButton" class="button button--secondary">Переключити режим</button>
-    </section>
-
-    <section class="card" aria-labelledby="error-info">
-      <h2 id="error-info" class="card__title">Помилки</h2>
+      <button id="saveButton" class="button button--secondary" type="button">Зберегти User ID</button>
+      <hr class="card__divider">
       <div class="card__actions">
-        <button id="showErrorButton" class="button button--secondary">Показати останню помилку</button>
-        <div id="errorMessage"></div>
+        <button id="requestAccessButton" class="button" type="button">Запросити доступ до пристрою</button>
+        <div class="field is-hidden" id="requestIdGroup">
+          <p class="card__sub-label">Request ID</p>
+          <div id="requestIdValue" class="readonly-box"></div>
+          <p class="field__note">Після схвалення пристрою адміністратор надішле одноразовий код підтвердження.</p>
+        </div>
+        <div class="field is-hidden" id="claimFieldGroup">
+          <label for="claimCodeInput">Код підтвердження</label>
+          <input type="text" id="claimCodeInput" placeholder="ABCD-EFGH-JKLM" autocomplete="off">
+        </div>
+        <button id="claimAccessButton" class="button button--success is-hidden" type="button">Активувати доступ</button>
+        <button id="cancelAccessSetupButton" class="button button--secondary is-hidden" type="button">Повернутися до інструментів</button>
       </div>
+      <div id="accessMessage" class="status-box status-box--neutral is-hidden" aria-live="polite"></div>
     </section>
+
+    <div id="mainContent" class="popup__main is-hidden">
+      <section class="card" aria-labelledby="one-time">
+        <h2 id="one-time" class="card__title">Ручне відкриття сервера</h2>
+        <div class="fields-inline">
+          <div class="field">
+            <label for="serverField">Сервер</label>
+            <input type="text" id="serverField" placeholder="Адрес сервера">
+          </div>
+          <div class="field">
+            <label for="portField">Порт</label>
+            <input type="text" id="portField" placeholder="Номер порта">
+          </div>
+        </div>
+        <button id="sendDataButton" class="button">Відкрити Backoffice / Chain</button>
+        <div id="inlineServerError" class="inline-server-error" aria-live="polite"></div>
+      </section>
+
+      <section class="card" aria-labelledby="mode-management">
+        <h2 id="mode-management" class="card__title">Режим</h2>
+        <p id="modeInfo">Завантаження даних...</p>
+        <button id="toggleModeButton" class="button button--secondary">Переключити режим</button>
+      </section>
+
+      <section class="card" aria-labelledby="error-info">
+        <h2 id="error-info" class="card__title">Помилки</h2>
+        <div class="card__actions">
+          <button id="showErrorButton" class="button button--secondary">Показати останню помилку</button>
+          <div id="errorMessage"></div>
+        </div>
+      </section>
+    </div>
   </div>
 
   <script src="popup.js"></script>

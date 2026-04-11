@@ -87,10 +87,206 @@ const removeDiscoStyle = (button) => {
     }
 };
 
-// Функція для вилучення адреси сервера (.daocloud.fun, .daocloud.it, .syrve.online) з рядка, що може містити кілька адрес через /
+const splitCardServerAddressCandidates = (rawAddress) => {
+    const normalizedAddress = String(rawAddress || '').trim();
+    if (!normalizedAddress) {
+        return [];
+    }
+
+    const parts = normalizedAddress.split(/\s+\/\s+/).map((part) => part.trim()).filter(Boolean);
+    return parts.length ? parts : [normalizedAddress];
+};
+
+const parseCardServerEndpoint = (value) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+        return null;
+    }
+
+    const candidate = /^[a-z]+:\/\//i.test(rawValue) ? rawValue : `http://${rawValue}`;
+
+    try {
+        const parsed = new URL(candidate);
+        return {
+            server: parsed.hostname.trim().toLowerCase(),
+            port: parsed.port.trim()
+        };
+    } catch (error) {
+        const sanitizedValue = rawValue
+            .replace(/^[a-z]+:\/\//i, '')
+            .split(/[/?#]/)[0]
+            .trim();
+
+        if (!sanitizedValue) {
+            return null;
+        }
+
+        const bracketMatch = sanitizedValue.match(/^\[([^\]]+)\](?::(\d+))?$/);
+        if (bracketMatch) {
+            return {
+                server: bracketMatch[1].trim().toLowerCase(),
+                port: (bracketMatch[2] || '').trim()
+            };
+        }
+
+        const portMatch = sanitizedValue.match(/^([^:]+):(\d+)$/);
+        if (portMatch) {
+            return {
+                server: portMatch[1].trim().toLowerCase(),
+                port: portMatch[2].trim()
+            };
+        }
+
+        return {
+            server: sanitizedValue.toLowerCase(),
+            port: ''
+        };
+    }
+};
+
+const normalizeServerHost = (value) => parseCardServerEndpoint(value)?.server || '';
+
+const getCardIpv4Octets = (value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalizedValue)) {
+        return null;
+    }
+
+    const octets = normalizedValue.split('.').map((part) => Number(part));
+    return octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? octets : null;
+};
+
+const isPrivateOrReservedCardIpv4Host = (value) => {
+    const octets = getCardIpv4Octets(value);
+    if (!octets) {
+        return false;
+    }
+
+    const [first, second] = octets;
+
+    if (first === 0 || first === 10 || first === 127 || first >= 224) {
+        return true;
+    }
+
+    if (first === 169 && second === 254) {
+        return true;
+    }
+
+    if (first === 172 && second >= 16 && second <= 31) {
+        return true;
+    }
+
+    if (first === 192 && second === 168) {
+        return true;
+    }
+
+    if (first === 100 && second >= 64 && second <= 127) {
+        return true;
+    }
+
+    if (first === 198 && (second === 18 || second === 19)) {
+        return true;
+    }
+
+    return false;
+};
+
+const isPublicCardIpv4Host = (value) => {
+    const octets = getCardIpv4Octets(value);
+    return Boolean(octets) && !isPrivateOrReservedCardIpv4Host(value);
+};
+
+const isPublicCardDomainHost = (value) => {
+    const normalizedValue = normalizeServerHost(value);
+    if (!normalizedValue || getCardIpv4Octets(normalizedValue)) {
+        return false;
+    }
+
+    if (!normalizedValue.includes('.') || normalizedValue === 'localhost') {
+        return false;
+    }
+
+    if (['.local', '.lan', '.home', '.internal', '.localhost'].some((suffix) => normalizedValue.endsWith(suffix))) {
+        return false;
+    }
+
+    return normalizedValue.split('.').every((label) => (
+        /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)
+        && !/^\d+$/.test(label)
+    ));
+};
+
+const classifyCardServerHost = (value) => {
+    const normalizedValue = normalizeServerHost(value);
+    if (!normalizedValue) {
+        return 'unknown';
+    }
+
+    if (isPublicCardDomainHost(normalizedValue)) {
+        return 'public-domain';
+    }
+
+    if (isPublicCardIpv4Host(normalizedValue)) {
+        return 'public-ipv4';
+    }
+
+    if (isPrivateOrReservedCardIpv4Host(normalizedValue)) {
+        return 'private-ipv4';
+    }
+
+    return 'unknown';
+};
+
+const selectPreferredCardServerAddress = (rawAddress) => {
+    const candidates = splitCardServerAddressCandidates(rawAddress)
+        .map((part) => {
+            const endpoint = parseCardServerEndpoint(part);
+            if (!endpoint?.server) {
+                return null;
+            }
+
+            const hostType = classifyCardServerHost(endpoint.server);
+            if (hostType === 'unknown') {
+                return null;
+            }
+
+            return {
+                raw: part,
+                server: endpoint.server,
+                port: endpoint.port,
+                hostType
+            };
+        })
+        .filter(Boolean);
+
+    const publicDomainCandidate = candidates.find((candidate) => candidate.hostType === 'public-domain');
+    if (publicDomainCandidate) {
+        return publicDomainCandidate;
+    }
+
+    const publicIpv4Candidate = candidates.find((candidate) => candidate.hostType === 'public-ipv4');
+    if (publicIpv4Candidate) {
+        return publicIpv4Candidate;
+    }
+
+    if (candidates.some((candidate) => candidate.hostType === 'private-ipv4')) {
+        return { errorCode: 'private-only' };
+    }
+
+    return { errorCode: 'not-found' };
+};
+
+const buildCardServerSelectionErrorMessage = (selectionResult) => {
+    if (selectionResult?.errorCode === 'private-only') {
+        return 'У полі адреси знайдено лише внутрішню адресу сервера. Вкажіть зовнішню адресу або публічний домен.';
+    }
+
+    return 'Адресу сервера не знайдено. Перевірте поле адреси.';
+};
+
 const extractDaoCloudAddress = (rawAddress) => {
-    const parts = rawAddress.split('/').map(s => s.trim()).filter(Boolean);
-    return parts.find(p => /\.daocloud\.fun|\.daocloud\.it|\.syrve\.online/i.test(p)) || null;
+    const selection = selectPreferredCardServerAddress(rawAddress);
+    return selection?.server || null;
 };
 
 const copyTextToClipboard = async (value) => {
@@ -209,36 +405,26 @@ let cardServerAvailabilityCheckTimerId = 0;
 let cardLicenseCheckRequestToken = 0;
 let activeCardLicenseCheckButton = null;
 
-const normalizeServerHost = (value) => {
-    const rawValue = (value || '').trim();
-    if (!rawValue) return '';
-
-    const candidate = /^[a-z]+:\/\//i.test(rawValue) ? rawValue : `https://${rawValue}`;
-
-    try {
-        return new URL(candidate).hostname.trim().toLowerCase();
-    } catch (error) {
-        return rawValue
-            .replace(/^https?:\/\//i, '')
-            .split('/')[0]
-            .trim()
-            .toLowerCase();
-    }
-};
-
 const isCardHttpOnlyHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
-    return CARD_HTTP_ONLY_DOMAINS.some((domain) => normalizedServer.endsWith(domain));
+    return isPublicCardIpv4Host(normalizedServer)
+        || CARD_HTTP_ONLY_DOMAINS.some((domain) => normalizedServer.endsWith(domain));
 };
 
+const requiresCardExplicitPort = (server) => isCardHttpOnlyHost(server);
+
 const resolveCardServerContext = (server, port) => {
-    const normalizedServer = normalizeServerHost(server);
+    const normalizedInput = server && typeof server === 'object'
+        ? server
+        : parseCardServerEndpoint(server);
+    const normalizedServer = normalizeServerHost(normalizedInput?.server || server);
     if (!normalizedServer) {
         return null;
     }
 
     const explicitPort = (port || '').trim();
-    const resolvedPort = explicitPort || (
+    const embeddedPort = String(normalizedInput?.port || '').trim();
+    const resolvedPort = explicitPort || embeddedPort || (
         SECURE_DEFAULT_PORT_DOMAINS.some((domain) => normalizedServer.endsWith(domain))
             ? '443'
             : ''
@@ -246,7 +432,44 @@ const resolveCardServerContext = (server, port) => {
 
     return {
         server: normalizedServer,
-        port: resolvedPort
+        port: resolvedPort,
+        hostType: normalizedInput?.hostType || classifyCardServerHost(normalizedServer)
+    };
+};
+
+const buildCardPortRequiredErrorMessage = (server) => (
+    isPublicCardIpv4Host(server)
+        ? 'Для зовнішньої IP-адреси потрібно заповнити порт у картці ресторану.'
+        : 'Для серверів daocloud.fun потрібно заповнити порт у картці ресторану.'
+);
+
+const resolveCardServerContextFromRawInput = (rawServer, port) => {
+    const selection = selectPreferredCardServerAddress(rawServer);
+    if (!selection?.server) {
+        return {
+            context: null,
+            errorMessage: buildCardServerSelectionErrorMessage(selection)
+        };
+    }
+
+    const context = resolveCardServerContext(selection, port);
+    if (!context?.server) {
+        return {
+            context: null,
+            errorMessage: 'Адресу сервера не знайдено. Перевірте поле адреси.'
+        };
+    }
+
+    if (requiresCardExplicitPort(context.server) && !context.port) {
+        return {
+            context: null,
+            errorMessage: buildCardPortRequiredErrorMessage(context.server)
+        };
+    }
+
+    return {
+        context,
+        selection
     };
 };
 
@@ -857,8 +1080,12 @@ const ensureCardLicenseModalStyles = () => {
             border-width: 1px;
             font-size: 12px;
             font-weight: 800;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
+            max-width: min(100%, 260px);
+            justify-content: center;
+            text-align: center;
+            line-height: 1.35;
+            letter-spacing: 0.01em;
+            white-space: normal;
             box-shadow: 0 10px 18px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
@@ -889,9 +1116,60 @@ const ensureCardLicenseModalStyles = () => {
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note {
-            background: linear-gradient(180deg, rgba(98, 158, 53, 0.1), rgba(98, 158, 53, 0.06));
-            color: #33561c;
-            border: 1px solid rgba(98, 158, 53, 0.14);
+            position: relative;
+            overflow: hidden;
+            display: grid;
+            gap: 6px;
+            padding: 14px 16px 14px 18px;
+            border-radius: 16px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note::before {
+            content: '';
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 5px;
+            background: currentColor;
+            opacity: 0.28;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note--success {
+            background: linear-gradient(135deg, rgba(98, 158, 53, 0.2), rgba(98, 158, 53, 0.11));
+            color: #2f4f18;
+            border-color: rgba(98, 158, 53, 0.2);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note--warning {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(245, 158, 11, 0.12));
+            color: #7c3d12;
+            border-color: rgba(217, 119, 6, 0.22);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note--error {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.24), rgba(239, 68, 68, 0.12));
+            color: #7f1d1d;
+            border-color: rgba(220, 38, 38, 0.24);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note-label {
+            position: relative;
+            margin: 0;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__status-note-message {
+            position: relative;
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__error-state {
@@ -1301,26 +1579,79 @@ const formatCardLicenseValidityLabel = (value) => {
         : `До ${normalizedValue}`;
 };
 
-const formatCardLicenseServerStatus = (status) => {
-    const tone = resolveCardLicenseStatusTone(status);
-    return tone === 'success' ? 'Сервер онлайн' : 'Сервер офлайн';
+const normalizeCardLicenseStatus = (status) => String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const formatCardLicenseBusinessStatus = (status) => {
+    const normalizedStatus = normalizeCardLicenseStatus(status);
+    if (!normalizedStatus) {
+        return 'Статус ліцензій невідомий';
+    }
+
+    switch (normalizedStatus) {
+        case 'ok':
+        case 'success':
+        case 'valid':
+        case 'active':
+            return 'Ліцензії активні';
+        case 'missed':
+            return 'Ліцензії не продовжені';
+        case 'expired':
+            return 'Ліцензії прострочені';
+        case 'not_valid':
+        case 'invalid':
+            return 'Ліцензії невалідні';
+        case 'denied':
+            return 'У доступі до ліцензій відмовлено';
+        case 'failed':
+            return 'Перевірка ліцензій не виконана';
+        case 'error':
+            return 'Помилка перевірки ліцензій';
+        default:
+            return 'Невідомий статус ліцензій';
+    }
 };
 
 const resolveCardLicenseStatusTone = (status) => {
-    const normalizedStatus = String(status || '').trim().toLowerCase();
+    const normalizedStatus = normalizeCardLicenseStatus(status);
     if (!normalizedStatus) {
         return 'warning';
     }
 
-    if (normalizedStatus === 'ok' || normalizedStatus === 'success') {
+    if (['ok', 'success', 'valid', 'active'].includes(normalizedStatus)) {
         return 'success';
     }
 
-    if (['error', 'failed', 'invalid', 'denied'].some((token) => normalizedStatus.includes(token))) {
+    if (normalizedStatus === 'missed') {
+        return 'warning';
+    }
+
+    if (
+        ['expired', 'not_valid', 'invalid', 'denied', 'failed', 'error'].includes(normalizedStatus) ||
+        ['expired', 'invalid', 'denied', 'failed', 'error'].some((token) => normalizedStatus.includes(token))
+    ) {
         return 'error';
     }
 
     return 'warning';
+};
+
+const buildCardLicenseStatusNote = (status, message) => {
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) {
+        return null;
+    }
+
+    const tone = resolveCardLicenseStatusTone(status);
+    const noteNode = createCardLicenseModalNode('div', `dao-license-modal__status-note dao-license-modal__status-note--${tone}`);
+    noteNode.appendChild(
+        createCardLicenseModalNode(
+            'p',
+            'dao-license-modal__status-note-label',
+            tone === 'success' ? 'Повідомлення сервера' : 'Важливе повідомлення'
+        )
+    );
+    noteNode.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__status-note-message', normalizedMessage));
+    return noteNode;
 };
 
 const normalizeCardLicenseGroup = (groupId) => {
@@ -1423,6 +1754,8 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     const fragment = document.createDocumentFragment();
     const serverInfo = licenseResult?.server && typeof licenseResult.server === 'object' ? licenseResult.server : {};
     const licenses = Array.isArray(licenseResult?.licenses) ? licenseResult.licenses : [];
+    const statusTone = resolveCardLicenseStatusTone(serverInfo.licenseStatus);
+    const statusText = formatCardLicenseBusinessStatus(serverInfo.licenseStatus);
 
     const overviewPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
     const serverBar = createCardLicenseModalNode('div', 'dao-license-modal__server-bar');
@@ -1433,11 +1766,16 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     serverBar.appendChild(
         createCardLicenseModalNode(
             'span',
-            `dao-license-modal__status-pill dao-license-modal__status-pill--${resolveCardLicenseStatusTone(serverInfo.licenseStatus)}`,
-            formatCardLicenseServerStatus(serverInfo.licenseStatus)
+            `dao-license-modal__status-pill dao-license-modal__status-pill--${statusTone}`,
+            statusText
         )
     );
     overviewPanel.appendChild(serverBar);
+
+    const statusNote = buildCardLicenseStatusNote(serverInfo.licenseStatus, serverInfo.statusMessage);
+    if (statusNote) {
+        overviewPanel.appendChild(statusNote);
+    }
 
     const badgeContainer = createCardLicenseModalNode('div', 'dao-license-modal__badges');
     if (serverInfo.companyName) {
@@ -1454,10 +1792,6 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     }
     if (badgeContainer.childElementCount > 0) {
         overviewPanel.appendChild(badgeContainer);
-    }
-
-    if (serverInfo.statusMessage) {
-        overviewPanel.appendChild(createCardLicenseModalNode('div', 'dao-license-modal__status-note', serverInfo.statusMessage));
     }
 
     fragment.appendChild(overviewPanel);
@@ -1939,18 +2273,17 @@ const pollCardServerError = async (context, options = {}) => {
                     clearCardErrorMessage();
 
                     const rawField72Value = field72ValueElement.textContent.trim();
-                    const extractedServer = extractDaoCloudAddress(rawField72Value);
-                    const serverContext = resolveCardServerContext(extractedServer, '');
-                    if (!serverContext?.server) {
-                        console.warn("Адреса сервера не знайдена, дію скасовано.");
-                        return;
-                    }
-
                     const field74ValueElement = document.querySelector(
                         "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(7) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
                     );
-                    const field74Value = field74ValueElement ? field74ValueElement.textContent.trim() : null;
-                    const finalServerContext = resolveCardServerContext(serverContext.server, field74Value);
+                    const field74Value = field74ValueElement ? field74ValueElement.textContent.trim() : '';
+                    const serverResolution = resolveCardServerContextFromRawInput(rawField72Value, field74Value);
+                    const finalServerContext = serverResolution.context;
+                    if (!finalServerContext?.server) {
+                        setCardErrorMessage(serverResolution.errorMessage || 'Адресу сервера не знайдено. Перевірте поле адреси.');
+                        console.warn("Адреса сервера не знайдена, дію скасовано.", serverResolution.errorMessage);
+                        return;
+                    }
 
                     // Отримуємо збережене значення з chrome.storage
                     try {
@@ -1959,8 +2292,8 @@ const pollCardServerError = async (context, options = {}) => {
 
                         // Формуємо дані для запиту
                         const payload = {
-                            address: finalServerContext?.server || serverContext.server,
-                            port: finalServerContext?.port || '',
+                            address: finalServerContext.server,
+                            port: finalServerContext.port || '',
                             client_id: savedField,
                         };
                         const requestToken = ++cardLoginRequestToken;
@@ -1988,7 +2321,7 @@ const pollCardServerError = async (context, options = {}) => {
                             console.log(await response.json(), response.status);
                             console.log("Дані успішно надіслано.");
                             setCardLoginStatus('waiting');
-                            const hasError = await pollCardServerError(finalServerContext || serverContext);
+                            const hasError = await pollCardServerError(finalServerContext);
 
                             if (requestToken !== cardLoginRequestToken) {
                                 return;
@@ -2006,13 +2339,13 @@ const pollCardServerError = async (context, options = {}) => {
                         } else {
                             console.error("Помилка при надсиланні:", response.status, response.statusText);
                             await pollCardServerError(finalServerContext || serverContext, {
-                                fallbackMessage: `Не вдалося виконати запит до сервера ${(finalServerContext || serverContext).server}${(finalServerContext || serverContext).port ? `:${(finalServerContext || serverContext).port}` : ''}. Код відповіді: ${response.status}.`
+                                fallbackMessage: `Не вдалося виконати запит до сервера ${finalServerContext.server}${finalServerContext.port ? `:${finalServerContext.port}` : ''}. Код відповіді: ${response.status}.`
                             });
                             resetCardLoginStatus();
                         }
                     } catch (error) {
                         console.error("Помилка мережі:", error);
-                        setCardErrorMessage(`Помилка підключення до сервера ${(finalServerContext || serverContext).server}${(finalServerContext || serverContext).port ? `:${(finalServerContext || serverContext).port}` : ''}. Перевірте адресу, порт та доступність сервера.`);
+                        setCardErrorMessage(`Помилка підключення до сервера ${finalServerContext.server}${finalServerContext.port ? `:${finalServerContext.port}` : ''}. Перевірте адресу, порт та доступність сервера.`);
                         resetCardLoginStatus();
                     }
                 });
@@ -2057,26 +2390,18 @@ const pollCardServerError = async (context, options = {}) => {
     const getServerData = (scopeRoot = document, showAlert = true) => {
         const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
         const rawServer = serverField ? serverField.textContent.trim() : '';
-        const extractedServer = extractDaoCloudAddress(rawServer);
-
-        if (!extractedServer) {
-            if (showAlert) {
-                alert("Адресу сервера не знайдено. Перевірте поле адреси.");
-            }
-            return null;
-        }
-
         const portField = scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
         const port = portField ? portField.textContent.trim() : '';
+        const serverResolution = resolveCardServerContextFromRawInput(rawServer, port);
 
-        if (isCardHttpOnlyHost(extractedServer) && !port) {
+        if (!serverResolution.context) {
             if (showAlert) {
-                alert('Для серверів daocloud.fun потрібно заповнити порт у картці ресторану.');
+                alert(serverResolution.errorMessage || 'Адресу сервера не знайдено. Перевірте поле адреси.');
             }
             return null;
         }
 
-        return resolveCardServerContext(extractedServer, port);
+        return serverResolution.context;
     };
 
     const createLicenseBtn = (label, action, color, scopeRoot) => {
@@ -2428,10 +2753,8 @@ const pollCardServerError = async (context, options = {}) => {
     const resolveServerEntry = (rawServer, rawPort) => {
         if (!rawServer) return null;
 
-        const extractedServer = extractDaoCloudAddress(rawServer);
-        if (!extractedServer) return null;
-
-        const serverContext = resolveCardServerContext(extractedServer, rawPort);
+        const serverResolution = resolveCardServerContextFromRawInput(rawServer, rawPort);
+        const serverContext = serverResolution.context;
         if (!serverContext) return null;
 
         return serverContext.port

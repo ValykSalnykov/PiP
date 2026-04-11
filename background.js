@@ -234,9 +234,10 @@ function sanitizeLicenseCheckLicenses(licenses) {
 async function fetchSyrveCredentials() {
   const storageData = await storageGet([STORAGE_KEYS.clientId, STORAGE_KEYS.apiKey]);
   const clientId = storageData[STORAGE_KEYS.clientId];
+  const normalizedClientId = String(clientId ?? '').trim();
   const apiKey = String(storageData[STORAGE_KEYS.apiKey] ?? '').trim();
 
-  if (!clientId) {
+  if (!normalizedClientId) {
     throw new Error('Спочатку збережіть Client ID у popup розширення.');
   }
 
@@ -244,7 +245,7 @@ async function fetchSyrveCredentials() {
     throw new Error('Спочатку збережіть X-API-Key у popup розширення.');
   }
 
-  const credentialId = normalizeCredentialId(clientId);
+  const credentialId = normalizeCredentialId(normalizedClientId);
   let response;
 
   try {
@@ -252,7 +253,8 @@ async function fetchSyrveCredentials() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey
+        'X-API-Key': apiKey,
+        'X-User-Id': normalizedClientId
       },
       body: JSON.stringify({ id: credentialId })
     });
@@ -593,7 +595,57 @@ function updateBadge(tabId) {
 }
 
 function isHttpOnlySyrveHost(server) {
-  return String(server ?? '').trim().toLowerCase().endsWith('.daocloud.fun');
+  const normalizedServer = String(server ?? '').trim().toLowerCase();
+  return isPublicIpv4SyrveHost(normalizedServer) || normalizedServer.endsWith('.daocloud.fun');
+}
+
+function getIpv4Octets(value) {
+  const normalizedValue = String(value ?? '').trim();
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalizedValue)) {
+    return null;
+  }
+
+  const octets = normalizedValue.split('.').map((part) => Number(part));
+  return octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? octets : null;
+}
+
+function isPrivateOrReservedIpv4Host(value) {
+  const octets = getIpv4Octets(value);
+  if (!octets) {
+    return false;
+  }
+
+  const [first, second] = octets;
+
+  if (first === 0 || first === 10 || first === 127 || first >= 224) {
+    return true;
+  }
+
+  if (first === 169 && second === 254) {
+    return true;
+  }
+
+  if (first === 172 && second >= 16 && second <= 31) {
+    return true;
+  }
+
+  if (first === 192 && second === 168) {
+    return true;
+  }
+
+  if (first === 100 && second >= 64 && second <= 127) {
+    return true;
+  }
+
+  if (first === 198 && (second === 18 || second === 19)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isPublicIpv4SyrveHost(value) {
+  return Boolean(getIpv4Octets(value)) && !isPrivateOrReservedIpv4Host(value);
 }
 
 function buildSyrvePageUrl({ server, port, path }) {

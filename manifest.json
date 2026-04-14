@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DAO Tools+",
-  "description": "Центр инструментов DAO: запуск PiP, интеграция с PlanFix и Syrve, а также будущие утилиты для работы.",
+  "description": "Инструменты DAO для Planfix и Syrve: PiP на внутренних страницах, автологин и проверка серверов.",
   "version": "1.4.0",
   "minimum_chrome_version": "116",
   "action": {
@@ -19,7 +19,6 @@
     "128": "icons/icon128.png"
   },
   "permissions": [
-    "activeTab",
     "tabs",
     "storage"
   ],

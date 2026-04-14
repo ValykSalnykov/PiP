@@ -1,8 +1,6 @@
 const inputField = document.getElementById("inputField");
 const saveButton = document.getElementById("saveButton");
 const requestAccessButton = document.getElementById("requestAccessButton");
-const requestIdGroup = document.getElementById("requestIdGroup");
-const requestIdValue = document.getElementById("requestIdValue");
 const claimFieldGroup = document.getElementById("claimFieldGroup");
 const claimCodeInput = document.getElementById("claimCodeInput");
 const claimAccessButton = document.getElementById("claimAccessButton");
@@ -128,6 +126,7 @@ const getAccessViewModel = (state, isForced) => {
         ? "Можна оновити User ID. Якщо ви зміните його, доступ до пристрою потрібно буде запросити заново."
         : "Пристрій уже має персональний доступ до захищених маршрутів.",
       help: "Поверніться до інструментів або змініть User ID, якщо доступ треба перевипустити для іншого користувача.",
+      showStatusBox: true,
       showRequestControls: false
     };
   }
@@ -137,9 +136,10 @@ const getAccessViewModel = (state, isForced) => {
       badge: "Очікує коду",
       badgeTone: "warning",
       boxTone: "warning",
-      title: "Запит доступу збережено",
-      intro: "Пристрій уже зареєстровано. Після ручного схвалення в адмінці введіть одноразовий код підтвердження.",
-      help: "Request ID збережено для цього пристрою. Якщо код прострочився, попросіть адміністратора видати новий.",
+      title: "",
+      intro: "Пристрій уже зареєстровано. Після схвалення, введіть одноразовий код підтвердження який вам нададуть.",
+      help: "",
+      showStatusBox: false,
       showRequestControls: true
     };
   }
@@ -149,9 +149,10 @@ const getAccessViewModel = (state, isForced) => {
       badge: "Готово до запиту",
       badgeTone: "neutral",
       boxTone: "neutral",
-      title: "User ID збережено",
-      intro: "Тепер можна надіслати запит на схвалення цього пристрою і дочекатися коду підтвердження від адміністратора.",
-      help: "Після запиту розширення збереже request ID і чекатиме на одноразовий код підтвердження.",
+      title: "",
+      intro: "Тепер можна надіслати запит на схвалення цього пристрою.",
+      help: "",
+      showStatusBox: false,
       showRequestControls: true
     };
   }
@@ -161,8 +162,9 @@ const getAccessViewModel = (state, isForced) => {
     badgeTone: "warning",
     boxTone: "warning",
     title: "Спочатку збережіть User ID",
-    intro: "Щоб отримувати логін і пароль Syrve та перевіряти ліцензії, цей пристрій має пройти ручне схвалення в адмінці.",
-    help: "Вкажіть User ID, який уже використовуєте в розширенні. Після цього можна буде запросити доступ для пристрою.",
+    intro: "Щоб працювати з розширенням, пристрій має пройти ручне схвалення.",
+    help: "",
+    showStatusBox: true,
     showRequestControls: true
   };
 };
@@ -615,7 +617,8 @@ const renderAccessState = () => {
   const viewModel = getAccessViewModel(state, isAccessSetupForced);
   const hasGrantedAccess = state.status === "granted";
   const shouldShowSetup = !hasGrantedAccess || isAccessSetupForced;
-  const helpText = state.notice || viewModel.help;
+  const shouldShowStatusBox = Boolean(viewModel.showStatusBox);
+  const helpText = shouldShowStatusBox ? (viewModel.help || "") : "";
 
   updateClientIdUI(state.userId || "");
   inputField.value = state.userId || "";
@@ -628,6 +631,7 @@ const renderAccessState = () => {
     applyStatusTone(accessStatusBadge, "status-pill", viewModel.badgeTone, STATUS_PILL_TONES);
   }
 
+  accessStatusBox?.classList.toggle("is-hidden", !shouldShowStatusBox);
   applyStatusTone(accessStatusBox, "status-box", viewModel.boxTone, STATUS_BOX_TONES);
 
   if (accessIntro) {
@@ -640,6 +644,7 @@ const renderAccessState = () => {
 
   if (accessHelpText) {
     accessHelpText.textContent = helpText;
+    accessHelpText.classList.toggle("is-hidden", !helpText);
   }
 
   const shouldShowRequestControls = viewModel.showRequestControls;
@@ -649,11 +654,6 @@ const renderAccessState = () => {
     requestAccessButton.dataset.defaultLabel = state.requestId ? "Оновити запит доступу" : "Запросити доступ до пристрою";
   }
   requestAccessButton.textContent = state.requestId ? "Оновити запит доступу" : "Запросити доступ до пристрою";
-
-  requestIdGroup?.classList.toggle("is-hidden", !shouldShowRequestControls || !state.requestId);
-  if (requestIdValue) {
-    requestIdValue.textContent = state.requestId || "";
-  }
 
   const shouldShowClaimControls = shouldShowRequestControls && Boolean(state.requestId);
   claimFieldGroup?.classList.toggle("is-hidden", !shouldShowClaimControls);
@@ -761,12 +761,14 @@ saveButton?.addEventListener("click", async () => {
     }
 
     renderAccessState();
-    setAccessMessage(
-      nextState.status === "granted"
-        ? "User ID оновлено. Поточний персональний доступ збережено."
-        : "User ID збережено. Тепер можна запросити доступ для пристрою.",
-      "success"
-    );
+
+    if (nextState.status === "granted") {
+      setAccessMessage("User ID оновлено.", "success");
+    } else if ((nextState.notice || "").includes("User ID змінено")) {
+      setAccessMessage("User ID оновлено. Запросіть доступ знову.", "warning");
+    } else {
+      clearAccessMessage();
+    }
   } catch (error) {
     setAccessMessage(error?.message || "Не вдалося зберегти User ID.", "error");
     inputField.focus();
@@ -786,10 +788,7 @@ requestAccessButton?.addEventListener("click", async () => {
     const response = await sendRuntimeMessage({ action: "REQUEST_EXTENSION_ACCESS" });
     popupAccessState = response.state;
     renderAccessState();
-    setAccessMessage(
-      popupAccessState.notice || "Запит на доступ до пристрою збережено. Після схвалення введіть код підтвердження.",
-      "warning"
-    );
+    clearAccessMessage();
   } catch (error) {
     setAccessMessage(error?.message || "Не вдалося запросити доступ для пристрою.", "error");
   } finally {

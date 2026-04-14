@@ -12,9 +12,9 @@
 
     body {
       margin: 0;
-      min-width: 320px;
-      max-width: 320px;
-      padding: 12px;
+      min-width: 360px;
+      max-width: 360px;
+      padding: 10px;
       font-family: "Inter", "Segoe UI", Arial, sans-serif;
       background: #f6f7fb;
       color: #111827;
@@ -22,9 +22,10 @@
     }
 
     .popup {
+      width: 100%;
       background: #ffffff;
       border-radius: 14px;
-      padding: 14px;
+      padding: 12px;
       display: grid;
       gap: 10px;
       box-shadow: 0 16px 28px rgba(79, 70, 229, 0.08);
@@ -42,6 +43,7 @@
 
     .popup__header {
       display: flex;
+      flex-wrap: wrap;
       align-items: flex-start;
       justify-content: space-between;
       gap: 8px;
@@ -51,6 +53,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      min-width: 0;
     }
 
     .popup__title {
@@ -93,10 +96,13 @@
 
     .popup__status {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
+      justify-content: flex-end;
       gap: 6px;
       font-size: 0.75rem;
       color: #4338ca;
+      max-width: 100%;
     }
 
     .popup__status.is-hidden {
@@ -116,6 +122,7 @@
       background: rgba(79, 70, 229, 0.12);
       padding: 4px 8px;
       border-radius: 999px;
+      overflow-wrap: anywhere;
     }
 
     .popup__link-button {
@@ -136,6 +143,7 @@
     .card {
       display: grid;
       gap: 8px;
+      min-width: 0;
       border-radius: 12px;
       border: 1px solid rgba(79, 70, 229, 0.12);
       padding: 10px;
@@ -176,6 +184,7 @@
     }
 
     .field input {
+      min-width: 0;
       width: 100%;
       padding: 7px 10px;
       border-radius: 8px;
@@ -210,6 +219,9 @@
       border: none;
       font-weight: 600;
       font-size: 0.88rem;
+      line-height: 1.35;
+      text-align: center;
+      white-space: normal;
       cursor: pointer;
       transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
       background: #4f46e5;
@@ -249,6 +261,7 @@
     .card__actions {
       display: grid;
       gap: 8px;
+      min-width: 0;
     }
 
     .card__lead {
@@ -305,6 +318,7 @@
 
     .popup__hero-header {
       display: flex;
+      flex-wrap: wrap;
       align-items: flex-start;
       justify-content: space-between;
       gap: 8px;
@@ -459,10 +473,10 @@
         <h2 id="device-access" class="card__title">Персональний доступ</h2>
         <span id="accessStatusBadge" class="status-pill status-pill--warning">Налаштування</span>
       </div>
-      <p id="accessIntro" class="card__lead">Щоб отримувати логін і пароль Syrve та перевіряти ліцензії, цей пристрій має пройти ручне схвалення в адмінці.</p>
+      <p id="accessIntro" class="card__lead">Щоб працювати з розширенням, пристрій має пройти ручне схвалення.</p>
       <div id="accessStatusBox" class="status-box status-box--neutral">
         <p id="accessStatusTitle" class="status-box__title">Спочатку збережіть User ID</p>
-        <p id="accessHelpText" class="status-box__text">Той самий стабільний ідентифікатор користувача, який уже використовує розширення.</p>
+        <p id="accessHelpText" class="status-box__text is-hidden"></p>
       </div>
       <div class="field">
         <label for="inputField">User ID</label>
@@ -472,11 +486,6 @@
       <hr class="card__divider">
       <div class="card__actions">
         <button id="requestAccessButton" class="button" type="button">Запросити доступ до пристрою</button>
-        <div class="field is-hidden" id="requestIdGroup">
-          <p class="card__sub-label">Request ID</p>
-          <div id="requestIdValue" class="readonly-box"></div>
-          <p class="field__note">Після схвалення пристрою адміністратор надішле одноразовий код підтвердження.</p>
-        </div>
         <div class="field is-hidden" id="claimFieldGroup">
           <label for="claimCodeInput">Код підтвердження</label>
           <input type="text" id="claimCodeInput" placeholder="ABCD-EFGH-JKLM" autocomplete="off">

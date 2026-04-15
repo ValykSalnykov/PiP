@@ -32,18 +32,22 @@ const SYRVE_TAB_CREDENTIALS = new Map();
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
 const SYRVE_CREDENTIAL_TTL_MS = 120000;
+const HELPDESK_DRAFT_REQUEST_TTL_MS = 5 * 60 * 1000;
 const EXTENSION_ACCESS_REQUEST_URL = 'http://daologistics.duckdns.org:8100/extension/access/request';
 const EXTENSION_ACCESS_CLAIM_URL = 'http://daologistics.duckdns.org:8100/extension/access/claim';
 const CREDENTIALS_LOOKUP_URL = 'http://daologistics.duckdns.org:8100/credentials/lookup';
 const SERVER_AVAILABILITY_URL = 'http://daologistics.duckdns.org:8100/server/availability';
 const LICENSE_CHECK_URL = 'http://daologistics.duckdns.org:8100/license/check';
+const HELPDESK_DRAFT_URL_BASE = 'https://pro.helpdeskeddy.com/ua/ticket/list/filter/id/352/ticket/create/draft/';
 const STORAGE_KEYS = {
   userId: 'userInput',
   legacyApiKey: 'credentialsApiKey',
   extensionClientId: 'extensionClientId',
   extensionRequestId: 'extensionAccessRequestId',
   extensionKey: 'extensionAccessKey',
-  accessNotice: 'extensionAccessNotice'
+  accessNotice: 'extensionAccessNotice',
+  helpDeskDraftRequests: 'helpDeskDraftRequests',
+  helpDeskNextDraftNumber: 'helpDeskNextDraftNumber'
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -116,6 +120,243 @@ function storageRemove(keys) {
       resolve();
     });
   });
+}
+
+function normalizeHelpDeskDraftRequestId(value) {
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) {
+    throw new Error('Missing HelpDeskEddy draft request id');
+  }
+
+  return normalizedValue;
+}
+
+function normalizeHelpDeskDraftNumber(value, fallback = 1) {
+  const numericValue = Number(value);
+  if (!Number.isInteger(numericValue) || numericValue <= 0) {
+    return fallback;
+  }
+
+  return numericValue;
+}
+
+function pruneHelpDeskDraftRequests(rawEntries, now = Date.now()) {
+  const sourceEntries = rawEntries && typeof rawEntries === 'object' && !Array.isArray(rawEntries)
+    ? rawEntries
+    : {};
+  const nextEntries = {};
+  let wasPruned = sourceEntries !== rawEntries;
+
+  Object.entries(sourceEntries).forEach(([requestId, request]) => {
+    if (!request || typeof request !== 'object') {
+      wasPruned = true;
+      return;
+    }
+
+    const createdAt = Number(request.createdAt);
+    if (!Number.isFinite(createdAt) || now - createdAt > HELPDESK_DRAFT_REQUEST_TTL_MS) {
+      wasPruned = true;
+      return;
+    }
+
+    nextEntries[requestId] = request;
+  });
+
+  if (!wasPruned && Object.keys(nextEntries).length !== Object.keys(sourceEntries).length) {
+    wasPruned = true;
+  }
+
+  return {
+    entries: nextEntries,
+    wasPruned
+  };
+}
+
+async function getHelpDeskDraftRequests() {
+  const result = await storageGet(STORAGE_KEYS.helpDeskDraftRequests);
+  const { entries, wasPruned } = pruneHelpDeskDraftRequests(result?.[STORAGE_KEYS.helpDeskDraftRequests]);
+  if (wasPruned) {
+    await storageSet({
+      [STORAGE_KEYS.helpDeskDraftRequests]: entries
+    });
+  }
+
+  return entries;
+}
+
+function setHelpDeskDraftRequests(entries) {
+  return storageSet({
+    [STORAGE_KEYS.helpDeskDraftRequests]: entries
+  });
+}
+
+async function reserveHelpDeskDraftNumber(existingRequests = null) {
+  const requests = existingRequests || await getHelpDeskDraftRequests();
+  const storedState = await storageGet(STORAGE_KEYS.helpDeskNextDraftNumber);
+  const storedDraftNumber = normalizeHelpDeskDraftNumber(storedState?.[STORAGE_KEYS.helpDeskNextDraftNumber], 1);
+  const highestActiveDraftNumber = Object.values(requests).reduce((maxDraftNumber, request) => {
+    return Math.max(maxDraftNumber, normalizeHelpDeskDraftNumber(request?.draftNumber, 0));
+  }, 0);
+
+  const draftNumber = Math.max(storedDraftNumber, highestActiveDraftNumber + 1, 1);
+  await storageSet({
+    [STORAGE_KEYS.helpDeskNextDraftNumber]: draftNumber + 1
+  });
+
+  return draftNumber;
+}
+
+function buildHelpDeskDraftUrl(requestId, draftNumber) {
+  const normalizedDraftNumber = normalizeHelpDeskDraftNumber(draftNumber, 1);
+  const url = new URL(`${HELPDESK_DRAFT_URL_BASE}${normalizedDraftNumber}`);
+  url.hash = new URLSearchParams({
+    'dao-tools-request': requestId
+  }).toString();
+  return url.toString();
+}
+
+async function openHelpDeskDraftTab({ requesterTabId, payload, active = true }) {
+  if (requesterTabId === undefined) {
+    throw new Error('Missing requester tab id');
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Missing HelpDeskEddy draft payload');
+  }
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const requests = await getHelpDeskDraftRequests();
+  const draftNumber = await reserveHelpDeskDraftNumber(requests);
+  const createdTab = await chrome.tabs.create({
+    url: buildHelpDeskDraftUrl(requestId, draftNumber),
+    active
+  });
+
+  if (createdTab.id === undefined) {
+    throw new Error('HelpDeskEddy tab was created without an id');
+  }
+
+  requests[requestId] = {
+    createdAt: Date.now(),
+    requesterTabId,
+    targetTabId: createdTab.id,
+    draftNumber,
+    payload
+  };
+
+  await setHelpDeskDraftRequests(requests);
+  log.info('Opened HelpDeskEddy draft tab', {
+    requesterTabId,
+    targetTabId: createdTab.id,
+    requestId,
+    draftNumber
+  });
+
+  return {
+    requestId,
+    tabId: createdTab.id,
+    draftNumber
+  };
+}
+
+async function getHelpDeskDraftRequest(requestId) {
+  const normalizedRequestId = normalizeHelpDeskDraftRequestId(requestId);
+  const requests = await getHelpDeskDraftRequests();
+  const request = requests[normalizedRequestId] ?? null;
+  if (!request) {
+    return null;
+  }
+
+  return {
+    requestId: normalizedRequestId,
+    ...request
+  };
+}
+
+async function getHelpDeskDraftRequestByTabId(tabId) {
+  if (tabId === undefined) {
+    return null;
+  }
+
+  const requests = await getHelpDeskDraftRequests();
+  const matchedEntry = Object.entries(requests).find(([, request]) => request?.targetTabId === tabId);
+  if (!matchedEntry) {
+    return null;
+  }
+
+  const [requestId, request] = matchedEntry;
+  return {
+    requestId,
+    ...request
+  };
+}
+
+function notifyHelpDeskDraftResult(requesterTabId, payload) {
+  if (requesterTabId === undefined) {
+    return;
+  }
+
+  chrome.tabs.sendMessage(requesterTabId, {
+    action: 'HELPDESK_DRAFT_FILL_RESULT',
+    ...payload
+  }).catch((error) => {
+    log.warn('Failed to deliver HelpDeskEddy draft result to PlanFix tab', {
+      requesterTabId,
+      error: error?.message
+    });
+  });
+}
+
+async function finalizeHelpDeskDraftRequest({ requestId, ok, error, sourceTabId }) {
+  const normalizedRequestId = normalizeHelpDeskDraftRequestId(requestId);
+  const requests = await getHelpDeskDraftRequests();
+  const request = requests[normalizedRequestId];
+  if (!request) {
+    return false;
+  }
+
+  delete requests[normalizedRequestId];
+  await setHelpDeskDraftRequests(requests);
+  notifyHelpDeskDraftResult(request.requesterTabId, {
+    requestId: normalizedRequestId,
+    ok,
+    error,
+    helpdeskTabId: request.targetTabId ?? sourceTabId
+  });
+
+  const logMethod = ok ? 'info' : 'warn';
+  log[logMethod]('Finalized HelpDeskEddy draft request', {
+    requestId: normalizedRequestId,
+    requesterTabId: request.requesterTabId,
+    targetTabId: request.targetTabId ?? sourceTabId,
+    ok,
+    error
+  });
+  return true;
+}
+
+async function resolveClosedHelpDeskDraftTab(tabId) {
+  const requests = await getHelpDeskDraftRequests();
+  let didChange = false;
+
+  Object.entries(requests).forEach(([requestId, request]) => {
+    if (request?.targetTabId !== tabId) {
+      return;
+    }
+
+    delete requests[requestId];
+    didChange = true;
+    notifyHelpDeskDraftResult(request.requesterTabId, {
+      requestId,
+      ok: false,
+      error: 'Вкладку чернетки HelpDeskEddy закрито до завершення автозаповнення.',
+      helpdeskTabId: tabId
+    });
+  });
+
+  if (didChange) {
+    await setHelpDeskDraftRequests(requests);
+  }
 }
 
 async function readJsonResponse(response) {
@@ -891,6 +1132,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.action === 'OPEN_HELPDESK_DRAFT') {
+    const requesterTabId = sender.tab?.id;
+    if (requesterTabId === undefined || !message.payload || typeof message.payload !== 'object') {
+      sendResponse({ ok: false, error: 'Missing requester tab or payload' });
+      return false;
+    }
+
+    openHelpDeskDraftTab({
+      requesterTabId,
+      payload: message.payload,
+      active: message.active !== false
+    })
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open HelpDeskEddy draft tab' }));
+
+    return true;
+  }
+
+  if (message?.action === 'GET_HELPDESK_DRAFT_PAYLOAD') {
+    const targetTabId = sender.tab?.id;
+    if (!message.requestId && targetTabId === undefined) {
+      sendResponse({ ok: false, error: 'Missing HelpDeskEddy draft request id' });
+      return false;
+    }
+
+    (async () => {
+      let request = null;
+      if (message.requestId) {
+        request = await getHelpDeskDraftRequest(message.requestId);
+      }
+
+      if (!request) {
+        request = await getHelpDeskDraftRequestByTabId(targetTabId);
+      }
+
+      return request;
+    })()
+      .then((request) => {
+        if (!request?.payload) {
+          sendResponse({ ok: false, error: 'Чернетку HelpDeskEddy не знайдено або час її дії сплив.' });
+          return;
+        }
+
+        sendResponse({
+          ok: true,
+          requestId: request.requestId,
+          payload: request.payload,
+          requesterTabId: request.requesterTabId,
+          targetTabId: request.targetTabId
+        });
+      })
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to read HelpDeskEddy draft payload' }));
+
+    return true;
+  }
+
+  if (message?.action === 'COMPLETE_HELPDESK_DRAFT_REQUEST') {
+    if (!message.requestId) {
+      sendResponse({ ok: false, error: 'Missing HelpDeskEddy draft request id' });
+      return false;
+    }
+
+    finalizeHelpDeskDraftRequest({
+      requestId: message.requestId,
+      ok: message.ok !== false,
+      error: message.error,
+      sourceTabId: sender.tab?.id
+    })
+      .then((found) => sendResponse({ ok: true, found }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to finalize HelpDeskEddy draft request' }));
+
+    return true;
+  }
+
   if (message?.action === 'GET_EXTENSION_ACCESS_STATE') {
     getExtensionAccessState()
       .then((state) => sendResponse({ ok: true, state }))
@@ -1020,6 +1335,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       error: 'Службова вкладка отримання періоду була закрита раніше завершення.'
     });
   }
+
+  resolveClosedHelpDeskDraftTab(tabId).catch((error) => {
+    log.warn('Failed to resolve closed HelpDeskEddy draft tab', {
+      tabId,
+      error: error?.message
+    });
+  });
 });
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {

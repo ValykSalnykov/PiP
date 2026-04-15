@@ -354,6 +354,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         setCardPeriodMessage(`Період: ${message.period} днів`);
+        return;
+    }
+
+    if (message.action === 'HELPDESK_DRAFT_FILL_RESULT') {
+        if (!message.requestId || message.requestId !== activeHelpDeskDraftRequestId) {
+            return;
+        }
+
+        activeHelpDeskDraftRequestId = null;
+        resetActiveHelpDeskDraftButton();
+
+        if (message.ok === false) {
+            setCardErrorMessage(`Не вдалося підготувати чернетку HelpDeskEddy: ${message.error || 'невідома помилка'}`);
+            return;
+        }
+
+        clearCardErrorMessage();
+        setCardPeriodMessage('Чернетку HelpDeskEddy підготовлено. Перевірте форму та створіть заявку вручну.');
     }
 });
 
@@ -380,6 +398,7 @@ const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
+const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
@@ -402,6 +421,7 @@ const CARD_CLOUD_SUBSCRIPTION_LABELS = {
 };
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it'];
 const CARD_HTTP_ONLY_DOMAINS = ['daocloud.fun'];
+const HELPDESK_DEFAULT_PRIORITY = 'Блокуюче';
 
 let cardErrorPollToken = 0;
 let activePeriodRequestId = null;
@@ -414,6 +434,8 @@ let cardServerAvailabilityInFlightKey = '';
 let cardServerAvailabilitySnapshot = null;
 let cardLicenseCheckRequestToken = 0;
 let activeCardLicenseCheckButton = null;
+let activeHelpDeskDraftRequestId = null;
+let activeHelpDeskDraftButton = null;
 
 const isCardHttpOnlyHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
@@ -900,6 +922,17 @@ const setCardActionButtonLoading = (button, isLoading, loadingLabel = '') => {
     button.style.cursor = isLoading ? 'wait' : 'pointer';
     button.style.opacity = isLoading ? '0.82' : '1';
     button.textContent = isLoading && loadingLabel ? loadingLabel : button.dataset.defaultLabel;
+};
+
+const resetActiveHelpDeskDraftButton = () => {
+    if (!(activeHelpDeskDraftButton instanceof HTMLButtonElement)) {
+        activeHelpDeskDraftButton = null;
+        return;
+    }
+
+    delete activeHelpDeskDraftButton.dataset.helpdeskDraftRequestId;
+    setCardActionButtonLoading(activeHelpDeskDraftButton, false);
+    activeHelpDeskDraftButton = null;
 };
 
 const resetActiveCardLicenseCheckButton = () => {
@@ -2561,6 +2594,94 @@ const pollCardServerError = async (context, options = {}) => {
         || document
     );
 
+    const isTaskPage = () => /^\/task\/\d+(?:\/|$)/.test(window.location.pathname);
+
+    const getCurrentTaskUrl = () => {
+        if (!isTaskPage()) {
+            return '';
+        }
+
+        const url = new URL(window.location.href);
+        url.hash = '';
+        return url.toString();
+    };
+
+    const getCardFieldText = (scopeRoot = document, fieldId) => {
+        const normalizedFieldId = String(fieldId || '').trim();
+        if (!normalizedFieldId) {
+            return '';
+        }
+
+        const fieldTarget = scopeRoot.querySelector(`.field-target[f-id="${normalizedFieldId}"]`);
+        if (!fieldTarget) {
+            return '';
+        }
+
+        const valueElement = fieldTarget.querySelector('.ObjectEditFieldBase__view__value__text');
+        const valueText = valueElement?.textContent?.trim() || '';
+        if (valueText) {
+            return valueText;
+        }
+
+        const rawValue = fieldTarget.querySelector('.object-edit-field-input')?.getAttribute('data-value') || '';
+        return rawValue.trim();
+    };
+
+    const buildHelpDeskDraftTitle = (payload) => `(...) - ${payload.restaurantName || '—'}`;
+
+    const buildHelpDeskDraftDescription = (payload) => ([
+        'Добрий день колеги!',
+        '',
+        payload.restaurantName || '—',
+        `SerialNumber: ${payload.uid || '—'}`,
+        `CRMID: ${payload.crmId || '—'}`,
+        `URL: ${payload.serverUrl || '—'}`
+    ].join('\n'));
+
+    const collectHelpDeskDraftPayload = (scopeRoot = document) => {
+        const taskUrl = getCurrentTaskUrl();
+        if (!taskUrl) {
+            throw new Error('Створення чернетки HelpDeskEddy доступне лише зі сторінки задачі Planfix.');
+        }
+
+        const serverData = getServerData(scopeRoot, false);
+        if (!serverData) {
+            throw new Error('Адресу сервера не знайдено. Перевірте картку ресторану.');
+        }
+
+        const restaurantName = getCardFieldText(scopeRoot, 106);
+        const payload = {
+            taskUrl,
+            externalNumber: taskUrl,
+            priority: HELPDESK_DEFAULT_PRIORITY,
+            title: '',
+            restaurantName,
+            clientName: getCardFieldText(scopeRoot, 80),
+            server: serverData.server,
+            port: serverData.port || '',
+            serverUrl: serverData.server,
+            version: getCardFieldText(scopeRoot, 96),
+            supportPackage: getCardFieldText(scopeRoot, 102),
+            chain: getCardFieldText(scopeRoot, 260),
+            city: getCardFieldText(scopeRoot, 104),
+            uid: getCardFieldText(scopeRoot, 110),
+            crmId: getCardFieldText(scopeRoot, 186),
+            type: getCardFieldText(scopeRoot, 138)
+        };
+
+        if (!payload.crmId) {
+            throw new Error('У картці не знайдено CRMID.');
+        }
+
+        if (!payload.version) {
+            throw new Error('У картці не знайдено версію Syrve.');
+        }
+
+        payload.title = buildHelpDeskDraftTitle(payload);
+        payload.description = buildHelpDeskDraftDescription(payload);
+        return payload;
+    };
+
     const getServerData = (scopeRoot = document, showAlert = true) => {
         const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
         const rawServer = serverField ? serverField.textContent.trim() : '';
@@ -2630,6 +2751,25 @@ const pollCardServerError = async (context, options = {}) => {
             }
 
             resolve(response.tabId);
+        });
+    });
+
+    const openHelpDeskDraft = (payload) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+            action: 'OPEN_HELPDESK_DRAFT',
+            payload
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+
+            if (!response?.ok || !response.requestId) {
+                reject(new Error(response?.error || 'Невідома помилка відкриття чернетки HelpDeskEddy.'));
+                return;
+            }
+
+            resolve(response);
         });
     });
 
@@ -2774,6 +2914,63 @@ const pollCardServerError = async (context, options = {}) => {
         });
         return btn;
     };
+    const createHelpDeskDraftBtn = (scopeRoot) => {
+        const btn = document.createElement('button');
+        btn.id = HELPDESK_DRAFT_BUTTON_ID;
+        btn.textContent = 'Заявка в Курву';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #ea580c;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+        btn.addEventListener('mouseenter', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '1';
+            }
+        });
+        btn.addEventListener('click', async () => {
+            if (!isTaskPage()) {
+                setCardErrorMessage('Створення чернетки HelpDeskEddy доступне лише зі сторінки задачі Planfix.');
+                return;
+            }
+
+            if (activeHelpDeskDraftButton) {
+                setCardErrorMessage('Підготовка чернетки HelpDeskEddy вже виконується.');
+                return;
+            }
+
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
+            activeHelpDeskDraftButton = btn;
+            setCardActionButtonLoading(btn, true, 'Готую чернетку...');
+
+            try {
+                const payload = collectHelpDeskDraftPayload(scopeRoot);
+                const response = await openHelpDeskDraft(payload);
+                activeHelpDeskDraftRequestId = response.requestId;
+                btn.dataset.helpdeskDraftRequestId = response.requestId;
+                setCardActionButtonLoading(btn, true, 'Заповнюю...');
+            } catch (error) {
+                activeHelpDeskDraftRequestId = null;
+                resetActiveHelpDeskDraftButton();
+                setCardErrorMessage(`Не вдалося підготувати чернетку HelpDeskEddy: ${error?.message || 'невідома помилка'}`);
+            }
+        });
+        return btn;
+    };
 
     const injectPanelButtons = (serverFieldTarget) => {
         if (!serverFieldTarget) return;
@@ -2803,10 +3000,26 @@ const pollCardServerError = async (context, options = {}) => {
             container.appendChild(createRestoBtn(scopeRoot));
             container.appendChild(createDevicesBtn(scopeRoot));
             container.appendChild(createPeriodBtn(scopeRoot));
+            if (isTaskPage()) {
+                container.appendChild(createHelpDeskDraftBtn(scopeRoot));
+            }
 
             wrapperBox.after(container);
         } else if (container.previousElementSibling !== wrapperBox) {
             wrapperBox.after(container);
+        }
+
+        const existingHelpDeskButton = container.querySelector(`#${HELPDESK_DRAFT_BUTTON_ID}`);
+        if (isTaskPage()) {
+            if (!existingHelpDeskButton) {
+                container.appendChild(createHelpDeskDraftBtn(scopeRoot));
+            }
+        } else if (existingHelpDeskButton) {
+            if (activeHelpDeskDraftButton === existingHelpDeskButton) {
+                activeHelpDeskDraftRequestId = null;
+                resetActiveHelpDeskDraftButton();
+            }
+            existingHelpDeskButton.remove();
         }
 
         ensureCardPeriodNode();
@@ -2847,6 +3060,8 @@ const pollCardServerError = async (context, options = {}) => {
             invalidateCardLoginRequest();
             invalidateCardServerAvailabilityCheck();
             activePeriodRequestId = null;
+            activeHelpDeskDraftRequestId = null;
+            resetActiveHelpDeskDraftButton();
         }
     });
 

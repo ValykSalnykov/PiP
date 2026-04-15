@@ -27,7 +27,8 @@
     "https://*.us-central1.hosted.app/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
-    "https://planfix-to-syrve.com:8000/*"
+    "https://planfix-to-syrve.com:8000/*",
+    "https://pro.helpdeskeddy.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -69,6 +70,15 @@
       ],
       "js": [
         "content/syrve-autofill.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://pro.helpdeskeddy.com/*"
+      ],
+      "js": [
+        "content/helpdeskeddy-autofill.js"
       ],
       "run_at": "document_idle"
     }

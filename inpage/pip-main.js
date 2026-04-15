@@ -35,8 +35,18 @@
   const EXTENSION_SOURCE = 'pip-extension';
   const PAGE_SOURCE = 'pip-page';
   const TASK_HIGHLIGHT_CLASS = 'pipx-task-flash';
+  const TASK_OVERDUE_BLINK_CLASS = 'pipx-task-overdue-blink';
   const TASK_HIGHLIGHT_DURATION_MS = 10000;
   const TASK_HIGHLIGHT_PULSE_DURATION_MS = 5000;
+  const TASK_OVERDUE_THRESHOLD_MS = 10 * 60 * 1000;
+  const TASK_OVERDUE_BLINK_ACTIVE_MS = 10000;
+  const TASK_OVERDUE_BLINK_CYCLE_MS = TASK_OVERDUE_BLINK_ACTIVE_MS * 2;
+  const GENERAL_POOL_PREFIXES = ['загальний пул', 'общий пул', 'general pool'];
+  const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
+    enabled: false,
+    color: '#2fd212',
+    overdueBlinkEnabled: false
+  });
 
   let lastKnownSize = null;
 
@@ -49,6 +59,7 @@
     styleMirror: null,
     titleObserver: null,
     mirrorObserver: null,
+    taskHighlightSettingsObserver: null,
     pipHideHandler: null,
     pipResizeHandler: null,
     elementResizeObserver: null,
@@ -64,6 +75,8 @@
     mode: null,
     selectedElement: null,
     mirroredElement: null,
+    domMirrorMap: null,
+    taskHighlightSettings: { ...DEFAULT_TASK_HIGHLIGHT_SETTINGS },
     taskHighlightExpirations: new Map(),
     taskHighlightCleanupTimer: null,
     elementParent: null,
@@ -668,6 +681,7 @@
     disconnectElementResizeObserver();
     disconnectMirrorObserver();
     resetTaskHighlights();
+    captureActiveTaskHighlightSettings();
 
     state.openPromise = (async () => {
       const options = { preferInitialWindowPlacement: true };
@@ -756,6 +770,7 @@
           fragment = result.fragment;
           state.selectedElement = result.sourceElement;
           state.mirroredElement = result.mirroredElement;
+          state.domMirrorMap = result.mirrorMap;
         } else if (mode === 'element') {
           if (!element || !(element instanceof Element) || !element.isConnected) {
             throw new Error('Selected element is not available in the document');
@@ -843,6 +858,8 @@
         if (mode === 'mirror' && state.selectedElement) {
           attachMirrorObserver(state.selectedElement);
         }
+
+        attachTaskHighlightSettingsObserver();
 
         post({ type: 'PIP_STATE', state: 'open', trigger, mode });
         logger.info('PiP window initialised', { trigger, mode });
@@ -1124,13 +1141,53 @@
   function createMirroredFragment(element) {
     const fragment = document.createDocumentFragment();
     const mirroredElement = element.cloneNode(true);
+
+    if (element instanceof Element && element.classList.contains('tasks-page')) {
+      captureTimeTrackerTaskSnapshot(mirroredElement, { applyDomMetadata: true });
+    }
+
+    const mirrorMap = createDomMirrorMap(element, mirroredElement);
     fragment.appendChild(mirroredElement);
 
     return {
       fragment,
       mirroredElement,
-      sourceElement: element
+      sourceElement: element,
+      mirrorMap
     };
+  }
+
+  function registerDomMirrorSubtree(sourceNode, mirroredNode, mirrorMap) {
+    if (!sourceNode || !mirroredNode || !(mirrorMap instanceof Map)) {
+      return;
+    }
+
+    mirrorMap.set(sourceNode, mirroredNode);
+
+    const sourceChildren = Array.from(sourceNode.childNodes || []);
+    const mirroredChildren = Array.from(mirroredNode.childNodes || []);
+    const childCount = Math.min(sourceChildren.length, mirroredChildren.length);
+
+    for (let index = 0; index < childCount; index += 1) {
+      registerDomMirrorSubtree(sourceChildren[index], mirroredChildren[index], mirrorMap);
+    }
+  }
+
+  function unregisterDomMirrorSubtree(sourceNode, mirrorMap) {
+    if (!sourceNode || !(mirrorMap instanceof Map)) {
+      return;
+    }
+
+    mirrorMap.delete(sourceNode);
+    Array.from(sourceNode.childNodes || []).forEach((childNode) => {
+      unregisterDomMirrorSubtree(childNode, mirrorMap);
+    });
+  }
+
+  function createDomMirrorMap(sourceRoot, mirroredRoot) {
+    const mirrorMap = new Map();
+    registerDomMirrorSubtree(sourceRoot, mirroredRoot, mirrorMap);
+    return mirrorMap;
   }
 
   function normalizeTaskIdentityPart(value) {
@@ -1138,6 +1195,335 @@
       .trim()
       .replace(/\s+/g, ' ')
       .toLowerCase();
+  }
+
+  function normalizeTaskHighlightColor(value, fallback = DEFAULT_TASK_HIGHLIGHT_SETTINGS.color) {
+    const normalizedValue = String(value || '').trim();
+    const shortHexMatch = normalizedValue.match(/^#([\da-fA-F]{3})$/);
+    if (shortHexMatch) {
+      return `#${shortHexMatch[1].split('').map((char) => `${char}${char}`).join('')}`.toLowerCase();
+    }
+
+    if (/^#([\da-fA-F]{6})$/.test(normalizedValue)) {
+      return normalizedValue.toLowerCase();
+    }
+
+    return fallback;
+  }
+
+  function hexToRgbChannels(hexColor) {
+    const normalizedColor = normalizeTaskHighlightColor(hexColor);
+    return {
+      r: parseInt(normalizedColor.slice(1, 3), 16),
+      g: parseInt(normalizedColor.slice(3, 5), 16),
+      b: parseInt(normalizedColor.slice(5, 7), 16)
+    };
+  }
+
+  function getTaskHighlightTextColor(hexColor) {
+    const { r, g, b } = hexToRgbChannels(hexColor);
+    const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+    return yiq >= 128 ? '#050505' : '#f8fafc';
+  }
+
+  function readTaskHighlightSettingsFromDocument() {
+    const root = document.documentElement;
+    return {
+      enabled: root?.dataset?.pipxTaskHighlightEnabled === 'true',
+      color: normalizeTaskHighlightColor(root?.dataset?.pipxTaskHighlightColor),
+      overdueBlinkEnabled: root?.dataset?.pipxTaskOverdueBlinkEnabled === 'true'
+    };
+  }
+
+  function captureActiveTaskHighlightSettings() {
+    const nextSettings = readTaskHighlightSettingsFromDocument();
+    state.taskHighlightSettings = nextSettings;
+    return nextSettings;
+  }
+
+  function applyTaskHighlightTheme(pipDoc) {
+    if (!(pipDoc?.documentElement instanceof Element)) {
+      return;
+    }
+
+    const activeSettings = state.taskHighlightSettings || DEFAULT_TASK_HIGHLIGHT_SETTINGS;
+    const fillColor = normalizeTaskHighlightColor(activeSettings.color);
+    const { r, g, b } = hexToRgbChannels(fillColor);
+
+    pipDoc.documentElement.style.setProperty('--pipx-task-highlight-fill', fillColor);
+    pipDoc.documentElement.style.setProperty('--pipx-task-highlight-text', getTaskHighlightTextColor(fillColor));
+    pipDoc.documentElement.style.setProperty('--pipx-task-highlight-rgb', `${r} ${g} ${b}`);
+  }
+
+  function handleTaskHighlightSettingsMutation() {
+    const previousSettings = state.taskHighlightSettings || DEFAULT_TASK_HIGHLIGHT_SETTINGS;
+    const nextSettings = captureActiveTaskHighlightSettings();
+
+    if (previousSettings.enabled && !nextSettings.enabled) {
+      resetTaskHighlights();
+    }
+
+    if (state.pipWindow && !state.pipWindow.closed) {
+      applyTaskHighlightTheme(state.pipWindow.document);
+    }
+
+    refreshTaskHighlights();
+  }
+
+  function attachTaskHighlightSettingsObserver() {
+    disconnectTaskHighlightSettingsObserver();
+
+    const root = document.documentElement;
+    if (!(root instanceof Element)) {
+      return;
+    }
+
+    const observer = new MutationObserver((mutations) => {
+      const hasRelevantMutation = mutations.some((mutation) => (
+        mutation.type === 'attributes' &&
+        (
+          mutation.attributeName === 'data-pipx-task-highlight-enabled' ||
+          mutation.attributeName === 'data-pipx-task-highlight-color' ||
+          mutation.attributeName === 'data-pipx-task-overdue-blink-enabled'
+        )
+      ));
+
+      if (!hasRelevantMutation) {
+        return;
+      }
+
+      handleTaskHighlightSettingsMutation();
+    });
+
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: [
+        'data-pipx-task-highlight-enabled',
+        'data-pipx-task-highlight-color',
+        'data-pipx-task-overdue-blink-enabled'
+      ]
+    });
+
+    state.taskHighlightSettingsObserver = observer;
+  }
+
+  function disconnectTaskHighlightSettingsObserver() {
+    if (state.taskHighlightSettingsObserver) {
+      state.taskHighlightSettingsObserver.disconnect();
+      state.taskHighlightSettingsObserver = null;
+    }
+  }
+
+  function getTimeTrackerSourceRoot() {
+    return state.selectedElement instanceof Element ? state.selectedElement : null;
+  }
+
+  function getTimeTrackerSourceNode(mirroredNode) {
+    if (!mirroredNode) {
+      return null;
+    }
+
+    const mirrorMap = state.domMirrorMap;
+    if (!(mirrorMap instanceof Map)) {
+      return null;
+    }
+
+    for (const [sourceNode, mirroredMatch] of mirrorMap.entries()) {
+      if (mirroredMatch === mirroredNode) {
+        return sourceNode;
+      }
+    }
+
+    return null;
+  }
+
+  function findTimeTrackerSourceTaskCard(mirroredControl) {
+    const mirroredCard = mirroredControl?.closest('.task-card');
+    const sourceRoot = getTimeTrackerSourceRoot();
+    if (!(mirroredCard instanceof Element) || !(sourceRoot instanceof Element)) {
+      return null;
+    }
+
+    const directSourceCard = getTimeTrackerSourceNode(mirroredCard);
+    if (directSourceCard instanceof Element && directSourceCard.classList.contains('task-card')) {
+      return directSourceCard;
+    }
+
+    const poolIndex = Number.parseInt(mirroredCard.dataset?.pipxPoolIndex || '', 10);
+    const cardIndex = Number.parseInt(mirroredCard.dataset?.pipxCardIndex || '', 10);
+    if (Number.isInteger(poolIndex) && poolIndex >= 0 && Number.isInteger(cardIndex) && cardIndex >= 0) {
+      const sourceSections = Array.from(sourceRoot.children).filter(
+        (child) => child instanceof Element && child.classList.contains('pool-section')
+      );
+      const sourceSection = sourceSections[poolIndex];
+      if (sourceSection instanceof Element) {
+        const sourceCards = Array.from(sourceSection.querySelectorAll('.task-card'));
+        const sourceCard = sourceCards[cardIndex];
+        if (sourceCard instanceof Element) {
+          return sourceCard;
+        }
+      }
+    }
+
+    const taskKey = mirroredCard.dataset?.pipxTaskKey;
+    if (!taskKey) {
+      return null;
+    }
+
+    return captureTimeTrackerTaskSnapshot(sourceRoot).find((entry) => entry.key === taskKey)?.element || null;
+  }
+
+  function findVisibleTimeTrackerNotificationOverlay(root) {
+    if (!(root instanceof Element)) {
+      return null;
+    }
+
+    const overlays = Array.from(root.querySelectorAll('.notification-overlay'));
+    const visibleOverlay = overlays.find((overlay) => {
+      if (!(overlay instanceof HTMLElement)) {
+        return false;
+      }
+      const styles = window.getComputedStyle(overlay);
+      return (
+        !overlay.hasAttribute('hidden') &&
+        overlay.getAttribute('aria-hidden') !== 'true' &&
+        styles.display !== 'none' &&
+        styles.visibility !== 'hidden'
+      );
+    });
+
+    return visibleOverlay || overlays[0] || null;
+  }
+
+  function resolveTimeTrackerSourceControl(mirroredControl) {
+    if (!(mirroredControl instanceof Element)) {
+      return null;
+    }
+
+    const directSourceControl = getTimeTrackerSourceNode(mirroredControl);
+    if (directSourceControl instanceof Element) {
+      return directSourceControl;
+    }
+
+    if (mirroredControl.matches('.ask-help-btn, .no-help-btn')) {
+      const sourceTaskCard = findTimeTrackerSourceTaskCard(mirroredControl);
+      if (!(sourceTaskCard instanceof Element)) {
+        return null;
+      }
+
+      if (mirroredControl.matches('.ask-help-btn')) {
+        return sourceTaskCard.querySelector('.ask-help-btn');
+      }
+
+      return sourceTaskCard.querySelector('.no-help-btn');
+    }
+
+    if (mirroredControl.matches('.notification-close, .notification-btn.ok, .notification-btn.no-help')) {
+      const sourceRoot = getTimeTrackerSourceRoot();
+      const sourceOverlay = findVisibleTimeTrackerNotificationOverlay(sourceRoot);
+      if (!(sourceOverlay instanceof Element)) {
+        return null;
+      }
+
+      if (mirroredControl.matches('.notification-close')) {
+        return sourceOverlay.querySelector('.notification-close');
+      }
+
+      if (mirroredControl.matches('.notification-btn.ok')) {
+        return sourceOverlay.querySelector('.notification-btn.ok');
+      }
+
+      return sourceOverlay.querySelector('.notification-btn.no-help');
+    }
+
+    return null;
+  }
+
+  function createSyntheticMouseEventInit(sourceControl, buttons = 0, detail = 0) {
+    const controlWindow = sourceControl.ownerDocument?.defaultView || window;
+    const rect = sourceControl.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+
+    return {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: controlWindow,
+      button: 0,
+      buttons,
+      detail,
+      clientX,
+      clientY
+    };
+  }
+
+  function dispatchSyntheticPointerEvent(sourceControl, type, buttons) {
+    if (typeof PointerEvent !== 'function') {
+      return;
+    }
+
+    sourceControl.dispatchEvent(new PointerEvent(type, {
+      ...createSyntheticMouseEventInit(sourceControl, buttons),
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+      pressure: buttons === 0 ? 0 : 0.5
+    }));
+  }
+
+  function dispatchSyntheticMouseEvent(sourceControl, type, buttons, detail = 0) {
+    sourceControl.dispatchEvent(new MouseEvent(
+      type,
+      createSyntheticMouseEventInit(sourceControl, buttons, detail)
+    ));
+  }
+
+  function proxyClickToSourceControl(sourceControl) {
+    if (!(sourceControl instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (!sourceControl.isConnected) {
+      return false;
+    }
+
+    if (
+      (sourceControl instanceof HTMLButtonElement ||
+        sourceControl instanceof HTMLInputElement ||
+        sourceControl instanceof HTMLSelectElement ||
+        sourceControl instanceof HTMLTextAreaElement) &&
+      sourceControl.disabled
+    ) {
+      return false;
+    }
+
+    if (sourceControl.getAttribute('aria-disabled') === 'true') {
+      return false;
+    }
+
+    dispatchSyntheticPointerEvent(sourceControl, 'pointerdown', 1);
+    dispatchSyntheticMouseEvent(sourceControl, 'mousedown', 1);
+    sourceControl.focus?.({ preventScroll: true });
+
+    if (!sourceControl.isConnected) {
+      return true;
+    }
+
+    dispatchSyntheticPointerEvent(sourceControl, 'pointerup', 0);
+    dispatchSyntheticMouseEvent(sourceControl, 'mouseup', 0);
+
+    if (!sourceControl.isConnected) {
+      return true;
+    }
+
+    if (typeof sourceControl.click === 'function') {
+      sourceControl.click();
+      return true;
+    }
+
+    dispatchSyntheticMouseEvent(sourceControl, 'click', 0, 1);
+    return true;
   }
 
   function isTimeTrackerMirrorRoot(element) {
@@ -1172,10 +1558,76 @@
     return `fallback:${poolIdentifier}:index:${cardIndex}`;
   }
 
-  function captureTimeTrackerTaskSnapshot(root) {
+  function parseTimeTrackerElapsedMs(value) {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) {
+      return null;
+    }
+
+    const parts = normalizedValue.split(':').map((part) => part.trim());
+    if (parts.length < 2 || parts.length > 3 || parts.some((part) => !/^\d+$/.test(part))) {
+      return null;
+    }
+
+    const numericParts = parts.map((part) => Number.parseInt(part, 10));
+    if (numericParts.some((part) => !Number.isFinite(part))) {
+      return null;
+    }
+
+    if (numericParts.length === 2) {
+      const [minutes, seconds] = numericParts;
+      return ((minutes * 60) + seconds) * 1000;
+    }
+
+    const [hours, minutes, seconds] = numericParts;
+    return (((hours * 60 * 60) + (minutes * 60) + seconds) * 1000);
+  }
+
+  function getTimeTrackerTaskElapsedMs(card) {
+    if (!(card instanceof Element)) {
+      return null;
+    }
+
+    const timerText = card.querySelector('.task-timer, .status-timer')?.textContent || '';
+    return parseTimeTrackerElapsedMs(timerText);
+  }
+
+  function isGeneralPoolIdentifier(poolIdentifier) {
+    const normalizedPoolIdentifier = normalizeTaskIdentityPart(poolIdentifier);
+    return GENERAL_POOL_PREFIXES.some((prefix) => normalizedPoolIdentifier.startsWith(prefix));
+  }
+
+  function getTaskOverdueBlinkElapsedMs(entry) {
+    if (!state.taskHighlightSettings?.overdueBlinkEnabled) {
+      return null;
+    }
+
+    if (!isGeneralPoolIdentifier(entry?.poolIdentifier)) {
+      return null;
+    }
+
+    const elapsedMs = entry?.elapsedMs;
+    // TimeTracker shows new tasks as a countdown from 10:00 to 00:00.
+    // After expiration it switches to 10:00+ and starts counting up,
+    // so strict "greater than" avoids treating a brand-new 10:00 task as overdue.
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= TASK_OVERDUE_THRESHOLD_MS) {
+      return null;
+    }
+
+    const cycleElapsed = (elapsedMs - TASK_OVERDUE_THRESHOLD_MS) % TASK_OVERDUE_BLINK_CYCLE_MS;
+    if (cycleElapsed >= TASK_OVERDUE_BLINK_ACTIVE_MS) {
+      return null;
+    }
+
+    return cycleElapsed;
+  }
+
+  function captureTimeTrackerTaskSnapshot(root, options = {}) {
     if (!(root instanceof Element)) {
       return [];
     }
+
+    const applyDomMetadata = options.applyDomMetadata === true;
 
     const sections = Array.from(root.children).filter(
       (child) => child instanceof Element && child.classList.contains('pool-section')
@@ -1189,8 +1641,17 @@
 
       cards.forEach((card, cardIndex) => {
         const key = getTimeTrackerTaskKey(card, poolIdentifier, cardIndex);
-        card.dataset.pipxTaskKey = key;
-        snapshot.push({ key, element: card });
+        if (applyDomMetadata && card instanceof HTMLElement) {
+          card.dataset.pipxTaskKey = key;
+          card.dataset.pipxPoolIndex = String(poolIndex);
+          card.dataset.pipxCardIndex = String(cardIndex);
+        }
+        snapshot.push({
+          key,
+          element: card,
+          poolIdentifier,
+          elapsedMs: getTimeTrackerTaskElapsedMs(card)
+        });
       });
     });
 
@@ -1236,9 +1697,14 @@
   }
 
   function applyTaskHighlightsFromSnapshot(snapshot, activeKeys, now = Date.now()) {
-    snapshot.forEach(({ key, element }) => {
+    snapshot.forEach((entry) => {
+      const { key, element } = entry;
       const isActive = activeKeys.has(key);
+      const overdueBlinkElapsed = getTaskOverdueBlinkElapsedMs(entry);
+      const isOverdueBlinkActive = Number.isFinite(overdueBlinkElapsed);
+
       element.classList.toggle(TASK_HIGHLIGHT_CLASS, isActive);
+      element.classList.toggle(TASK_OVERDUE_BLINK_CLASS, isOverdueBlinkActive);
 
       if (isActive) {
         const expiresAt = state.taskHighlightExpirations.get(key) ?? now;
@@ -1247,6 +1713,12 @@
         element.style.setProperty('--pipx-task-flash-delay', `${-pulseElapsed}ms`);
       } else {
         element.style.removeProperty('--pipx-task-flash-delay');
+      }
+
+      if (isOverdueBlinkActive) {
+        element.style.setProperty('--pipx-task-overdue-delay', `${-overdueBlinkElapsed}ms`);
+      } else {
+        element.style.removeProperty('--pipx-task-overdue-delay');
       }
     });
   }
@@ -1258,8 +1730,8 @@
     }
 
     const now = Date.now();
-    const snapshot = captureTimeTrackerTaskSnapshot(mirroredElement);
-    const activeKeys = getActiveTaskHighlightKeys(now);
+    const snapshot = captureTimeTrackerTaskSnapshot(mirroredElement, { applyDomMetadata: true });
+    const activeKeys = state.taskHighlightSettings?.enabled ? getActiveTaskHighlightKeys(now) : new Set();
     applyTaskHighlightsFromSnapshot(snapshot, activeKeys, now);
   }
 
@@ -1284,6 +1756,10 @@
   }
 
   function registerTaskHighlights(taskKeys) {
+    if (!state.taskHighlightSettings?.enabled) {
+      return new Set();
+    }
+
     if (!taskKeys || taskKeys.size === 0) {
       return getActiveTaskHighlightKeys();
     }
@@ -1313,11 +1789,11 @@
     }
 
     const previousSnapshot = isTimeTrackerMirrorRoot(mirroredElement)
-      ? captureTimeTrackerTaskSnapshot(mirroredElement)
+      ? captureTimeTrackerTaskSnapshot(mirroredElement, { applyDomMetadata: true })
       : [];
     const nextMirror = sourceElement.cloneNode(true);
     const nextSnapshot = isTimeTrackerMirrorRoot(nextMirror)
-      ? captureTimeTrackerTaskSnapshot(nextMirror)
+      ? captureTimeTrackerTaskSnapshot(nextMirror, { applyDomMetadata: true })
       : [];
     const now = Date.now();
     const newTaskKeys = getNewTaskHighlightKeys(previousSnapshot, nextSnapshot);
@@ -1330,6 +1806,102 @@
       pipWindow.document.body.appendChild(nextMirror);
     }
     state.mirroredElement = nextMirror;
+    state.domMirrorMap = createDomMirrorMap(sourceElement, nextMirror);
+  }
+
+  function syncMirroredMutations(mutations) {
+    const sourceElement = state.selectedElement;
+    const mirroredElement = state.mirroredElement;
+    const pipWindow = state.pipWindow;
+    const mirrorMap = state.domMirrorMap;
+
+    if (!sourceElement || !mirroredElement || !pipWindow || pipWindow.closed) {
+      return;
+    }
+
+    if (!sourceElement.isConnected) {
+      logger.warn('Source element disconnected while PiP mirror is active');
+      restore('mirror-source-disconnected');
+      return;
+    }
+
+    if (!(mirrorMap instanceof Map) || mirrorMap.get(sourceElement) !== mirroredElement) {
+      syncMirroredElement();
+      return;
+    }
+
+    const previousSnapshot = isTimeTrackerMirrorRoot(mirroredElement)
+      ? captureTimeTrackerTaskSnapshot(mirroredElement, { applyDomMetadata: true })
+      : [];
+
+    let requiresFullSync = false;
+
+    for (const mutation of mutations) {
+      if (requiresFullSync) {
+        break;
+      }
+
+      if (mutation.type === 'childList') {
+        const mirroredTarget = mirrorMap.get(mutation.target);
+        if (!(mirroredTarget instanceof Node)) {
+          requiresFullSync = true;
+          break;
+        }
+
+        mutation.removedNodes.forEach((node) => {
+          const mirroredNode = mirrorMap.get(node);
+          if (mirroredNode instanceof Node) {
+            mirroredNode.remove();
+          }
+          unregisterDomMirrorSubtree(node, mirrorMap);
+        });
+
+        mutation.addedNodes.forEach((node) => {
+          const nextSiblingClone = mutation.nextSibling ? mirrorMap.get(mutation.nextSibling) : null;
+          const mirroredNode = node.cloneNode(true);
+          registerDomMirrorSubtree(node, mirroredNode, mirrorMap);
+          mirroredTarget.insertBefore(mirroredNode, nextSiblingClone instanceof Node ? nextSiblingClone : null);
+        });
+      } else if (mutation.type === 'attributes') {
+        if (!(mutation.target instanceof Element) || !mutation.attributeName) {
+          continue;
+        }
+
+        const mirroredNode = mirrorMap.get(mutation.target);
+        if (!(mirroredNode instanceof Element)) {
+          requiresFullSync = true;
+          break;
+        }
+
+        const value = mutation.target.getAttribute(mutation.attributeName);
+        if (value === null) {
+          mirroredNode.removeAttribute(mutation.attributeName);
+        } else {
+          mirroredNode.setAttribute(mutation.attributeName, value);
+        }
+      } else if (mutation.type === 'characterData') {
+        const mirroredNode = mirrorMap.get(mutation.target);
+        if (!(mirroredNode instanceof Node)) {
+          requiresFullSync = true;
+          break;
+        }
+
+        mirroredNode.textContent = mutation.target.textContent;
+      }
+    }
+
+    if (requiresFullSync) {
+      syncMirroredElement();
+      return;
+    }
+
+    const now = Date.now();
+    const nextSnapshot = isTimeTrackerMirrorRoot(mirroredElement)
+      ? captureTimeTrackerTaskSnapshot(mirroredElement, { applyDomMetadata: true })
+      : [];
+    const newTaskKeys = getNewTaskHighlightKeys(previousSnapshot, nextSnapshot);
+    const activeHighlightKeys = registerTaskHighlights(newTaskKeys);
+    applyTaskHighlightsFromSnapshot(nextSnapshot, activeHighlightKeys, now);
   }
 
   function attachMirrorObserver(element) {
@@ -1337,16 +1909,51 @@
     if (!element) return;
 
     let syncQueued = false;
-    const scheduleSync = () => {
+    let pendingMutations = [];
+    const scheduleSync = (mutations = []) => {
+      if (mutations.length > 0) {
+        pendingMutations = pendingMutations.concat(mutations);
+      }
+
       if (syncQueued) return;
       syncQueued = true;
+
+      const activeWindow = state.pipWindow && !state.pipWindow.closed
+        ? state.pipWindow
+        : window;
+      const requestFrame = typeof activeWindow?.requestAnimationFrame === 'function'
+        ? activeWindow.requestAnimationFrame.bind(activeWindow)
+        : null;
+
+      if (requestFrame) {
+        requestFrame(() => {
+          syncQueued = false;
+          const nextBatch = pendingMutations;
+          pendingMutations = [];
+          if (nextBatch.length > 0) {
+            syncMirroredMutations(nextBatch);
+          } else {
+            syncMirroredElement();
+          }
+        });
+        return;
+      }
+
       queueMicrotask(() => {
         syncQueued = false;
-        syncMirroredElement();
+        const nextBatch = pendingMutations;
+        pendingMutations = [];
+        if (nextBatch.length > 0) {
+          syncMirroredMutations(nextBatch);
+        } else {
+          syncMirroredElement();
+        }
       });
     };
 
-    const observer = new MutationObserver(scheduleSync);
+    const observer = new MutationObserver((mutations) => {
+      scheduleSync(mutations);
+    });
     observer.observe(element, {
       attributes: true,
       childList: true,
@@ -1389,9 +1996,76 @@
 
     copyStylesheets(pipDoc);
     mirrorTitle(pipDoc);
+    applyTaskHighlightTheme(pipDoc);
     injectPipStyles(pipDoc, siteRule);
 
     pipDoc.body.appendChild(fragment);
+    attachPipInteractions(pipWindow, siteRule);
+  }
+
+  function attachPipInteractions(pipWindow, siteRule) {
+    if (siteRule?.pipStyleProfile !== 'daolog-time-tracker-compact') {
+      return;
+    }
+
+    const pipDoc = pipWindow.document;
+    if (pipDoc.body.dataset.pipxTaskLinksBound === 'true') {
+      return;
+    }
+
+    pipDoc.body.dataset.pipxTaskLinksBound = 'true';
+    pipDoc.addEventListener('click', (event) => {
+      const interactionTarget = event.target instanceof Element ? event.target : null;
+      if (!(interactionTarget instanceof Element)) {
+        return;
+      }
+
+      const link = interactionTarget.closest('.tasks-page .task-link-btn[href]');
+
+      if (!(link instanceof HTMLAnchorElement)) {
+        const proxiedControl = interactionTarget.closest(
+          '.tasks-page .ask-help-btn, .tasks-page .no-help-btn, .tasks-page .notification-close, .tasks-page .notification-btn.ok, .tasks-page .notification-btn.no-help'
+        );
+
+        if (!(proxiedControl instanceof Element)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const sourceControl = resolveTimeTrackerSourceControl(proxiedControl);
+        if (!sourceControl) {
+          logger.warn('Unable to resolve source control for PiP interaction', {
+            classes: proxiedControl.className
+          });
+          return;
+        }
+
+        const clicked = proxyClickToSourceControl(sourceControl);
+        if (!clicked) {
+          logger.debug('Skipped PiP proxy click for disabled or unsupported control', {
+            classes: proxiedControl.className
+          });
+        }
+        return;
+      }
+
+      const href = link.href?.trim();
+      if (!href) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      try {
+        const openedWindow = window.open(href, link.target || '_blank', 'noopener,noreferrer');
+        openedWindow?.focus?.();
+      } catch (error) {
+        logger.warn('Failed to open task link from PiP window', { href, error });
+      }
+    }, true);
   }
 
   function injectPipStyles(pipDoc, siteRule) {
@@ -1400,6 +2074,10 @@
     style.textContent = `
 :root {
   color-scheme: ${document.documentElement?.style?.colorScheme || 'auto'};
+  --pipx-task-highlight-fill: #2fd212;
+  --pipx-task-highlight-text: #050505;
+  --pipx-task-highlight-rgb: 47 210 18;
+  --pipx-task-overdue-rgb: 239 68 68;
 }
 
 html.pipx-html,
@@ -1467,7 +2145,7 @@ ${getSiteSpecificPipStyles(siteRule)}
 
 /* TimeTracker compact profile for PiP */
 .tasks-page {
-  gap: 0 !important;
+  gap: 4px !important;
   padding: 8px !important;
 }
 
@@ -1521,8 +2199,8 @@ ${getSiteSpecificPipStyles(siteRule)}
   animation-delay: var(--pipx-task-flash-delay, 0ms) !important;
   will-change: transform, box-shadow;
   z-index: 4 !important;
-  background-color: #2fd212 !important;
-  color: #050505 !important;
+  background-color: var(--pipx-task-highlight-fill) !important;
+  color: var(--pipx-task-highlight-text) !important;
 }
 
 .tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} .task-name,
@@ -1533,7 +2211,14 @@ ${getSiteSpecificPipStyles(siteRule)}
 .tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} a,
 .tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} span,
 .tasks-page .task-card.${TASK_HIGHLIGHT_CLASS} div {
-  color: #050505 !important;
+  color: var(--pipx-task-highlight-text) !important;
+}
+
+.tasks-page .task-card.${TASK_OVERDUE_BLINK_CLASS} {
+  animation: pipx-task-overdue-pulse ${TASK_HIGHLIGHT_PULSE_DURATION_MS}ms ease-out 2 both !important;
+  animation-delay: var(--pipx-task-overdue-delay, 0ms) !important;
+  will-change: transform, box-shadow;
+  z-index: 4 !important;
 }
 
 @keyframes pipx-task-flash-pulse {
@@ -1543,7 +2228,7 @@ ${getSiteSpecificPipStyles(siteRule)}
   }
   10% {
     transform: scale(1.03);
-    box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.92), 0 0 10px 4px rgba(59, 130, 246, 0.72), 0 0 18px 8px rgba(96, 165, 250, 0.34) !important;
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-highlight-rgb) / 0.92), 0 0 10px 4px rgb(var(--pipx-task-highlight-rgb) / 0.72), 0 0 18px 8px rgb(var(--pipx-task-highlight-rgb) / 0.34) !important;
   }
   20% {
     transform: scale(1);
@@ -1551,7 +2236,7 @@ ${getSiteSpecificPipStyles(siteRule)}
   }
   30% {
     transform: scale(1.045);
-    box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.96), 0 0 12px 4px rgba(59, 130, 246, 0.8), 0 0 20px 9px rgba(96, 165, 250, 0.4) !important;
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-highlight-rgb) / 0.96), 0 0 12px 4px rgb(var(--pipx-task-highlight-rgb) / 0.8), 0 0 20px 9px rgb(var(--pipx-task-highlight-rgb) / 0.4) !important;
   }
   40% {
     transform: scale(1);
@@ -1559,7 +2244,7 @@ ${getSiteSpecificPipStyles(siteRule)}
   }
   50% {
     transform: scale(1.055);
-    box-shadow: 0 0 0 3px rgba(191, 219, 254, 0.98), 0 0 14px 5px rgba(59, 130, 246, 0.84), 0 0 22px 10px rgba(96, 165, 250, 0.44) !important;
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-highlight-rgb) / 0.98), 0 0 14px 5px rgb(var(--pipx-task-highlight-rgb) / 0.84), 0 0 22px 10px rgb(var(--pipx-task-highlight-rgb) / 0.44) !important;
   }
   60% {
     transform: scale(1);
@@ -1567,7 +2252,7 @@ ${getSiteSpecificPipStyles(siteRule)}
   }
   70% {
     transform: scale(1.065);
-    box-shadow: 0 0 0 3px rgba(191, 219, 254, 1), 0 0 15px 5px rgba(59, 130, 246, 0.88), 0 0 24px 10px rgba(96, 165, 250, 0.5) !important;
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-highlight-rgb) / 1), 0 0 15px 5px rgb(var(--pipx-task-highlight-rgb) / 0.88), 0 0 24px 10px rgb(var(--pipx-task-highlight-rgb) / 0.5) !important;
   }
   80% {
     transform: scale(1);
@@ -1575,11 +2260,11 @@ ${getSiteSpecificPipStyles(siteRule)}
   }
   90% {
     transform: scale(1.075);
-    box-shadow: 0 0 0 3px rgba(219, 234, 254, 1), 0 0 16px 6px rgba(59, 130, 246, 0.94), 0 0 26px 10px rgba(96, 165, 250, 0.56) !important;
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-highlight-rgb) / 1), 0 0 16px 6px rgb(var(--pipx-task-highlight-rgb) / 0.94), 0 0 26px 10px rgb(var(--pipx-task-highlight-rgb) / 0.56) !important;
   }
   96% {
     transform: scale(1);
-    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.18), 0 0 5px 1px rgba(59, 130, 246, 0.12) !important;
+    box-shadow: 0 0 0 1px rgb(var(--pipx-task-highlight-rgb) / 0.18), 0 0 5px 1px rgb(var(--pipx-task-highlight-rgb) / 0.12) !important;
   }
   100% {
     transform: scale(1);
@@ -1587,15 +2272,68 @@ ${getSiteSpecificPipStyles(siteRule)}
   }
 }
 
+@keyframes pipx-task-overdue-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--pipx-task-overdue-rgb) / 0) !important;
+  }
+  10% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-overdue-rgb) / 0.92), 0 0 10px 4px rgb(var(--pipx-task-overdue-rgb) / 0.72), 0 0 18px 8px rgb(var(--pipx-task-overdue-rgb) / 0.34) !important;
+  }
+  20% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--pipx-task-overdue-rgb) / 0) !important;
+  }
+  30% {
+    transform: scale(1.045);
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-overdue-rgb) / 0.96), 0 0 12px 4px rgb(var(--pipx-task-overdue-rgb) / 0.8), 0 0 20px 9px rgb(var(--pipx-task-overdue-rgb) / 0.4) !important;
+  }
+  40% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--pipx-task-overdue-rgb) / 0) !important;
+  }
+  50% {
+    transform: scale(1.055);
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-overdue-rgb) / 0.98), 0 0 14px 5px rgb(var(--pipx-task-overdue-rgb) / 0.84), 0 0 22px 10px rgb(var(--pipx-task-overdue-rgb) / 0.44) !important;
+  }
+  60% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--pipx-task-overdue-rgb) / 0) !important;
+  }
+  70% {
+    transform: scale(1.065);
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-overdue-rgb) / 1), 0 0 15px 5px rgb(var(--pipx-task-overdue-rgb) / 0.88), 0 0 24px 10px rgb(var(--pipx-task-overdue-rgb) / 0.5) !important;
+  }
+  80% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--pipx-task-overdue-rgb) / 0) !important;
+  }
+  90% {
+    transform: scale(1.075);
+    box-shadow: 0 0 0 3px rgb(var(--pipx-task-overdue-rgb) / 1), 0 0 16px 6px rgb(var(--pipx-task-overdue-rgb) / 0.94), 0 0 26px 10px rgb(var(--pipx-task-overdue-rgb) / 0.56) !important;
+  }
+  96% {
+    transform: scale(1);
+    box-shadow: 0 0 0 1px rgb(var(--pipx-task-overdue-rgb) / 0.18), 0 0 5px 1px rgb(var(--pipx-task-overdue-rgb) / 0.12) !important;
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(var(--pipx-task-overdue-rgb) / 0) !important;
+  }
+}
+
 .tasks-page .task-content {
   align-items: center !important;
   gap: 6px !important;
   padding: 6px 8px !important;
+  position: relative !important;
 }
 
 .tasks-page .task-info {
   gap: 2px !important;
   min-width: 0 !important;
+  flex: 1 1 auto !important;
 }
 
 .tasks-page .task-name {
@@ -1604,11 +2342,94 @@ ${getSiteSpecificPipStyles(siteRule)}
 }
 
 .tasks-page .task-actions {
-  display: none !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  position: absolute !important;
+  top: 50% !important;
+  right: 8px !important;
+  transform: translateY(-50%) !important;
+  z-index: 2 !important;
+}
+
+.tasks-page .task-link-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 999px !important;
+  flex-shrink: 0 !important;
+  background-color: rgba(26, 35, 50, 0.92) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: none !important;
+  transition: none !important;
+}
+
+.tasks-page .task-card .ask-help-btn,
+.tasks-page .task-card .no-help-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: absolute !important;
+  top: 50% !important;
+  z-index: 2 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(-50%) !important;
+  transition: none !important;
+}
+
+.tasks-page .task-card .ask-help-btn {
+  right: 42px !important;
+}
+
+.tasks-page .task-card .no-help-btn {
+  right: 76px !important;
+}
+
+.tasks-page .task-card:hover .task-link-btn,
+.tasks-page .task-card:focus-within .task-link-btn {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: none !important;
+}
+
+.tasks-page .task-card:hover .ask-help-btn,
+.tasks-page .task-card:hover .no-help-btn,
+.tasks-page .task-card:focus-within .ask-help-btn,
+.tasks-page .task-card:focus-within .no-help-btn,
+.tasks-page .task-content:hover .ask-help-btn,
+.tasks-page .task-content:hover .no-help-btn {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateY(-50%) !important;
+}
+
+.tasks-page .task-card:hover .ask-help-btn:disabled,
+.tasks-page .task-card:hover .no-help-btn:disabled,
+.tasks-page .task-card:focus-within .ask-help-btn:disabled,
+.tasks-page .task-card:focus-within .no-help-btn:disabled,
+.tasks-page .task-content:hover .ask-help-btn:disabled,
+.tasks-page .task-content:hover .no-help-btn:disabled {
+  opacity: 0.45 !important;
+  pointer-events: none !important;
+}
+
+.tasks-page .task-card:hover .task-info,
+.tasks-page .task-card:focus-within .task-info {
+  padding-right: 112px !important;
+}
+
+.tasks-page .notification-overlay,
+.tasks-page .notification-popup,
+.tasks-page .notification-close,
+.tasks-page .notification-btn {
+  pointer-events: auto !important;
 }
 
 .tasks-page .pip-toggle-btn,
-.tasks-page .task-link-btn,
 .tasks-page .reverse-timer-btn,
 .tasks-page .collapse-btn {
   display: none !important;
@@ -1629,7 +2450,7 @@ ${getSiteSpecificPipStyles(siteRule)}
 
 @media (max-width: 420px) {
   .tasks-page {
-    gap: 0 !important;
+    gap: 4px !important;
     padding: 6px !important;
   }
 
@@ -1673,7 +2494,7 @@ ${getSiteSpecificPipStyles(siteRule)}
 
 @media (max-width: 340px) {
   .tasks-page {
-    gap: 0 !important;
+    gap: 4px !important;
     padding: 4px !important;
   }
 
@@ -1799,6 +2620,7 @@ ${getSiteSpecificPipStyles(siteRule)}
   function cleanupObservers() {
     disconnectElementResizeObserver();
     disconnectMirrorObserver();
+    disconnectTaskHighlightSettingsObserver();
     resetTaskHighlights();
     if (state.styleObserver) {
       state.styleObserver.disconnect();
@@ -1811,6 +2633,10 @@ ${getSiteSpecificPipStyles(siteRule)}
     if (state.styleMirror) {
       state.styleMirror.clear();
       state.styleMirror = null;
+    }
+    if (state.domMirrorMap) {
+      state.domMirrorMap.clear();
+      state.domMirrorMap = null;
     }
     logger.debug('Cleaned up observers and mirrors');
   }

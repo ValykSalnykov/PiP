@@ -42,14 +42,26 @@
 
   const EXTENSION_SOURCE = 'pip-extension';
   const PAGE_SOURCE = 'pip-page';
+  const TASK_HIGHLIGHT_STORAGE_KEYS = {
+    enabled: 'pipTimeTrackerTaskHighlightEnabled',
+    color: 'pipTimeTrackerTaskHighlightColor',
+    overdueBlinkEnabled: 'pipTimeTrackerTaskOverdueBlinkEnabled'
+  };
+  const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
+    enabled: false,
+    color: '#2fd212',
+    overdueBlinkEnabled: false
+  });
 
   const scriptUrl = chrome.runtime.getURL('inpage/pip-main.js');
   const styleUrl = chrome.runtime.getURL('inpage/pip-placeholder.css');
 
+  applyTaskHighlightSettingsToDom(root, DEFAULT_TASK_HIGHLIGHT_SETTINGS);
   logger.info('Injecting PiP controller assets', { scriptUrl, styleUrl });
 
   injectStyle(styleUrl);
   injectMainScript(scriptUrl);
+  syncTaskHighlightSettingsToDom(root);
 
   chrome.runtime.onMessage.addListener((message) => {
     if (!message || typeof message.command !== 'string') {
@@ -94,6 +106,22 @@
     }
   });
 
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') {
+      return;
+    }
+
+    if (
+      !(TASK_HIGHLIGHT_STORAGE_KEYS.enabled in changes) &&
+      !(TASK_HIGHLIGHT_STORAGE_KEYS.color in changes) &&
+      !(TASK_HIGHLIGHT_STORAGE_KEYS.overdueBlinkEnabled in changes)
+    ) {
+      return;
+    }
+
+    syncTaskHighlightSettingsToDom(root);
+  });
+
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const data = event.data;
@@ -134,5 +162,53 @@
     link.dataset.pipxNoMirror = 'true';
     (document.head || document.documentElement || document).appendChild(link);
     logger.debug('Style injected', { href });
+  }
+
+  function normalizeHexColor(value, fallback = DEFAULT_TASK_HIGHLIGHT_SETTINGS.color) {
+    const normalizedValue = String(value || '').trim();
+    const shortHexMatch = normalizedValue.match(/^#([\da-fA-F]{3})$/);
+    if (shortHexMatch) {
+      return `#${shortHexMatch[1].split('').map((char) => `${char}${char}`).join('')}`.toLowerCase();
+    }
+
+    if (/^#([\da-fA-F]{6})$/.test(normalizedValue)) {
+      return normalizedValue.toLowerCase();
+    }
+
+    return fallback;
+  }
+
+  function applyTaskHighlightSettingsToDom(target, settings) {
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const nextSettings = {
+      enabled: settings?.enabled === true,
+      color: normalizeHexColor(settings?.color),
+      overdueBlinkEnabled: settings?.overdueBlinkEnabled === true
+    };
+
+    target.dataset.pipxTaskHighlightEnabled = nextSettings.enabled ? 'true' : 'false';
+    target.dataset.pipxTaskHighlightColor = nextSettings.color;
+    target.dataset.pipxTaskOverdueBlinkEnabled = nextSettings.overdueBlinkEnabled ? 'true' : 'false';
+    logger.debug('Applied task highlight settings to DOM dataset', nextSettings);
+  }
+
+  function syncTaskHighlightSettingsToDom(target) {
+    chrome.storage.local.get(
+      [
+        TASK_HIGHLIGHT_STORAGE_KEYS.enabled,
+        TASK_HIGHLIGHT_STORAGE_KEYS.color,
+        TASK_HIGHLIGHT_STORAGE_KEYS.overdueBlinkEnabled
+      ],
+      (result) => {
+        applyTaskHighlightSettingsToDom(target, {
+          enabled: result?.[TASK_HIGHLIGHT_STORAGE_KEYS.enabled] === true,
+          color: result?.[TASK_HIGHLIGHT_STORAGE_KEYS.color],
+          overdueBlinkEnabled: result?.[TASK_HIGHLIGHT_STORAGE_KEYS.overdueBlinkEnabled] === true
+        });
+      }
+    );
   }
 })();

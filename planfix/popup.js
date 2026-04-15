@@ -20,6 +20,10 @@ const modeInfo = document.getElementById("modeInfo");
 const toggleModeButton = document.getElementById("toggleModeButton");
 const showErrorButton = document.getElementById("showErrorButton");
 const errorMessage = document.getElementById("errorMessage");
+const taskHighlightSettings = document.getElementById("taskHighlightSettings");
+const taskHighlightToggle = document.getElementById("taskHighlightToggle");
+const taskHighlightColorInput = document.getElementById("taskHighlightColor");
+const taskOverdueBlinkToggle = document.getElementById("taskOverdueBlinkToggle");
 const inlineServerError = document.getElementById("inlineServerError");
 const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
@@ -34,7 +38,10 @@ const STORAGE_KEYS = {
   extensionKey: "extensionAccessKey",
   accessNotice: "extensionAccessNotice",
   discoMode: "discoMode",
-  serverContext: "lastServerContext"
+  serverContext: "lastServerContext",
+  taskHighlightEnabled: "pipTimeTrackerTaskHighlightEnabled",
+  taskHighlightColor: "pipTimeTrackerTaskHighlightColor",
+  taskOverdueBlinkEnabled: "pipTimeTrackerTaskOverdueBlinkEnabled"
 };
 
 const KNOWN_443_DOMAINS = ["syrve.online", "daocloud.it"];
@@ -42,6 +49,11 @@ const HTTP_ONLY_DOMAINS = ["daocloud.fun"];
 const INLINE_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const STATUS_BOX_TONES = ["neutral", "warning", "success", "error"];
 const STATUS_PILL_TONES = ["neutral", "warning", "success"];
+const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
+  enabled: false,
+  color: "#2fd212",
+  overdueBlinkEnabled: false
+});
 
 let inlineErrorPollToken = 0;
 let popupAccessState = null;
@@ -58,6 +70,67 @@ const storageSet = (data) => new Promise((resolve) => {
     resolve();
   });
 });
+
+const normalizeHexColor = (value, fallback = DEFAULT_TASK_HIGHLIGHT_SETTINGS.color) => {
+  const normalizedValue = String(value || "").trim();
+  const shortHexMatch = normalizedValue.match(/^#([\da-fA-F]{3})$/);
+  if (shortHexMatch) {
+    return `#${shortHexMatch[1].split("").map((char) => `${char}${char}`).join("")}`.toLowerCase();
+  }
+
+  if (/^#([\da-fA-F]{6})$/.test(normalizedValue)) {
+    return normalizedValue.toLowerCase();
+  }
+
+  return fallback;
+};
+
+const getTaskHighlightSettings = (storageState = {}) => ({
+  enabled: storageState[STORAGE_KEYS.taskHighlightEnabled] === true,
+  color: normalizeHexColor(storageState[STORAGE_KEYS.taskHighlightColor]),
+  overdueBlinkEnabled: storageState[STORAGE_KEYS.taskOverdueBlinkEnabled] === true
+});
+
+const applyTaskHighlightSettingsState = (settings) => {
+  const nextSettings = {
+    enabled: settings?.enabled === true,
+    color: normalizeHexColor(settings?.color),
+    overdueBlinkEnabled: settings?.overdueBlinkEnabled === true
+  };
+
+  if (taskHighlightToggle) {
+    taskHighlightToggle.checked = nextSettings.enabled;
+  }
+
+  if (taskHighlightColorInput) {
+    taskHighlightColorInput.value = nextSettings.color;
+    taskHighlightColorInput.disabled = !nextSettings.enabled;
+  }
+
+  if (taskOverdueBlinkToggle) {
+    taskOverdueBlinkToggle.checked = nextSettings.overdueBlinkEnabled;
+  }
+
+  taskHighlightSettings?.classList.toggle(
+    "highlight-settings--disabled",
+    !nextSettings.enabled && !nextSettings.overdueBlinkEnabled
+  );
+};
+
+const persistTaskHighlightSettings = async (settings) => {
+  const nextSettings = {
+    enabled: settings?.enabled === true,
+    color: normalizeHexColor(settings?.color),
+    overdueBlinkEnabled: settings?.overdueBlinkEnabled === true
+  };
+
+  applyTaskHighlightSettingsState(nextSettings);
+  await storageSet({
+    [STORAGE_KEYS.taskHighlightEnabled]: nextSettings.enabled,
+    [STORAGE_KEYS.taskHighlightColor]: nextSettings.color,
+    [STORAGE_KEYS.taskOverdueBlinkEnabled]: nextSettings.overdueBlinkEnabled
+  });
+};
 
 const sendRuntimeMessage = (message) => new Promise((resolve, reject) => {
   chrome.runtime.sendMessage(message, (response) => {
@@ -698,10 +771,14 @@ const persistUserId = async () => {
 (async () => {
   const result = await storageGet([
     STORAGE_KEYS.discoMode,
-    STORAGE_KEYS.serverContext
+    STORAGE_KEYS.serverContext,
+    STORAGE_KEYS.taskHighlightEnabled,
+    STORAGE_KEYS.taskHighlightColor,
+    STORAGE_KEYS.taskOverdueBlinkEnabled
   ]);
   const discoMode = result[STORAGE_KEYS.discoMode] || false;
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
+  const highlightSettings = getTaskHighlightSettings(result);
 
   try {
     const accessState = await fetchExtensionAccessState();
@@ -723,6 +800,7 @@ const persistUserId = async () => {
   renderAccessState();
 
   restoreServerContext(serverContext);
+  applyTaskHighlightSettingsState(highlightSettings);
 
   if (discoMode) {
     discoBall?.classList.add('active');
@@ -730,6 +808,30 @@ const persistUserId = async () => {
 
   await refreshInlineServerError();
 })();
+
+taskHighlightToggle?.addEventListener("change", async () => {
+  await persistTaskHighlightSettings({
+    enabled: taskHighlightToggle.checked,
+    color: taskHighlightColorInput?.value,
+    overdueBlinkEnabled: taskOverdueBlinkToggle?.checked
+  });
+});
+
+taskHighlightColorInput?.addEventListener("change", async () => {
+  await persistTaskHighlightSettings({
+    enabled: taskHighlightToggle?.checked,
+    color: taskHighlightColorInput.value,
+    overdueBlinkEnabled: taskOverdueBlinkToggle?.checked
+  });
+});
+
+taskOverdueBlinkToggle?.addEventListener("change", async () => {
+  await persistTaskHighlightSettings({
+    enabled: taskHighlightToggle?.checked,
+    color: taskHighlightColorInput?.value,
+    overdueBlinkEnabled: taskOverdueBlinkToggle.checked
+  });
+});
 
 editClientBtn?.addEventListener("click", () => {
   isAccessSetupForced = true;

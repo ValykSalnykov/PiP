@@ -394,6 +394,12 @@ const CARD_LICENSE_GROUP_LABELS = {
     pos: 'POS',
     other: 'Інше'
 };
+const CARD_CLOUD_SUBSCRIPTION_HOST_SUFFIX = '.syrve.online';
+const CARD_CLOUD_ENTERPRISE_LICENSE_NAME = 'КЦ в бекофісі - Delivery (Callcenter)';
+const CARD_CLOUD_SUBSCRIPTION_LABELS = {
+    enterprise: 'CLOUD ENTERPRISE',
+    pro: 'CLOUD PRO'
+};
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it'];
 const CARD_HTTP_ONLY_DOMAINS = ['daocloud.fun'];
 
@@ -1167,6 +1173,26 @@ const ensureCardLicenseModalStyles = () => {
             box-shadow: 0 10px 18px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.16);
         }
 
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__subscription-chip {
+            padding: 7px 11px;
+            border-width: 1px;
+            font-size: 13px;
+            font-weight: 800;
+            max-width: min(100%, 220px);
+            justify-content: center;
+            text-align: center;
+            line-height: 1.35;
+            letter-spacing: 0.04em;
+            white-space: normal;
+            text-transform: uppercase;
+            background: linear-gradient(180deg, rgba(96, 165, 250, 0.3), rgba(37, 99, 235, 0.18));
+            border-color: rgba(191, 219, 254, 0.38);
+            color: #eff6ff;
+            box-shadow: 0 10px 18px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+            margin-left: auto;
+            margin-right: auto;
+        }
+
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__status-pill--success {
             background: linear-gradient(180deg, #7ac943, #5ea72f);
             border-color: rgba(154, 230, 116, 0.42);
@@ -1487,6 +1513,11 @@ const ensureCardLicenseModalStyles = () => {
             box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
         }
 
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar > * {
+            position: relative;
+            z-index: 1;
+        }
+
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar::before {
             content: '';
             position: absolute;
@@ -1496,6 +1527,7 @@ const ensureCardLicenseModalStyles = () => {
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-info {
+            flex: 0 1 auto;
             min-width: 0;
             display: grid;
             gap: 3px;
@@ -1513,6 +1545,9 @@ const ensureCardLicenseModalStyles = () => {
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-value {
             display: inline-flex;
             align-items: center;
+            justify-self: start;
+            width: fit-content;
+            max-width: 100%;
             margin: 0;
             padding: 7px 10px;
             border-radius: 12px;
@@ -1614,6 +1649,12 @@ const ensureCardLicenseModalStyles = () => {
                 flex-direction: column;
             }
 
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__subscription-chip,
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__server-bar .dao-license-modal__status-pill {
+                width: 100%;
+                max-width: none;
+            }
+
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-meta {
                 justify-content: flex-start;
             }
@@ -1644,6 +1685,59 @@ const createCardLicenseModalBadge = (label, value) => {
 const createCardLicenseModalChip = (text, modifier = '') => {
     const className = ['dao-license-modal__chip', modifier].filter(Boolean).join(' ');
     return createCardLicenseModalNode('span', className, text);
+};
+
+const isCardCloudSubscriptionHost = (serverContext) => {
+    const normalizedServer = normalizeServerHost(serverContext?.server || serverContext);
+    return Boolean(normalizedServer) && normalizedServer.endsWith(CARD_CLOUD_SUBSCRIPTION_HOST_SUFFIX);
+};
+
+const normalizeCardCloudLicenseMatchValue = (value) => String(value || '')
+    .toLowerCase()
+    .replace(/[()]/g, ' ')
+    .replace(/[\s\-–—_:]+/g, ' ')
+    .trim();
+
+const buildCardCloudLicenseMatchValue = (license) => {
+    if (!license || typeof license !== 'object') {
+        return '';
+    }
+
+    const primaryName = license.friendlyName || license.name || '';
+    const secondaryName = license.friendlyName && license.name && license.name !== license.friendlyName
+        ? license.name
+        : '';
+
+    return normalizeCardCloudLicenseMatchValue([primaryName, secondaryName].filter(Boolean).join(' '));
+};
+
+const hasCardCloudEnterpriseLicense = (licenses) => {
+    if (!Array.isArray(licenses)) {
+        return false;
+    }
+
+    const normalizedTarget = normalizeCardCloudLicenseMatchValue(CARD_CLOUD_ENTERPRISE_LICENSE_NAME);
+    const requiredTokens = ['кц', 'бекофіс', 'delivery', 'callcenter'];
+
+    return licenses.some((license) => {
+        const searchableValue = buildCardCloudLicenseMatchValue(license);
+        if (!searchableValue) {
+            return false;
+        }
+
+        return searchableValue === normalizedTarget
+            || requiredTokens.every((token) => searchableValue.includes(token));
+    });
+};
+
+const resolveCardCloudSubscriptionLabel = (serverContext, licenses) => {
+    if (!isCardCloudSubscriptionHost(serverContext)) {
+        return '';
+    }
+
+    return hasCardCloudEnterpriseLicense(licenses)
+        ? CARD_CLOUD_SUBSCRIPTION_LABELS.enterprise
+        : CARD_CLOUD_SUBSCRIPTION_LABELS.pro;
 };
 
 const formatCardLicenseValidityLabel = (value) => {
@@ -1834,6 +1928,12 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     const licenses = Array.isArray(licenseResult?.licenses) ? licenseResult.licenses : [];
     const statusTone = resolveCardLicenseStatusTone(serverInfo.licenseStatus);
     const statusText = formatCardLicenseBusinessStatus(serverInfo.licenseStatus);
+    const subscriptionLabel = resolveCardCloudSubscriptionLabel(serverContext, licenses);
+    const statusPillNode = createCardLicenseModalNode(
+        'span',
+        `dao-license-modal__status-pill dao-license-modal__status-pill--${statusTone}`,
+        statusText
+    );
 
     const overviewPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
     const serverBar = createCardLicenseModalNode('div', 'dao-license-modal__server-bar');
@@ -1841,13 +1941,10 @@ const buildCardLicenseResultContent = (serverContext, licenseResult) => {
     serverInfoNode.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__server-label', 'Адреса сервера'));
     serverInfoNode.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__server-value', formatCardServerContextLabel(serverContext)));
     serverBar.appendChild(serverInfoNode);
-    serverBar.appendChild(
-        createCardLicenseModalNode(
-            'span',
-            `dao-license-modal__status-pill dao-license-modal__status-pill--${statusTone}`,
-            statusText
-        )
-    );
+    if (subscriptionLabel) {
+        serverBar.appendChild(createCardLicenseModalChip(subscriptionLabel, 'dao-license-modal__subscription-chip'));
+    }
+    serverBar.appendChild(statusPillNode);
     overviewPanel.appendChild(serverBar);
 
     const statusNote = buildCardLicenseStatusNote(serverInfo.licenseStatus, serverInfo.statusMessage);

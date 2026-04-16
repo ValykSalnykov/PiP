@@ -398,6 +398,7 @@ const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
+const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
@@ -422,6 +423,8 @@ const CARD_CLOUD_SUBSCRIPTION_LABELS = {
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it'];
 const CARD_HTTP_ONLY_DOMAINS = ['daocloud.fun'];
 const HELPDESK_DEFAULT_PRIORITY = 'Блокуюче';
+const CARD_ERROR_SOURCE_MANUAL = 'manual';
+const CARD_ERROR_SOURCE_SERVER_POLL = 'server-poll';
 
 let cardErrorPollToken = 0;
 let activePeriodRequestId = null;
@@ -888,16 +891,41 @@ const clearCardPeriodMessage = () => {
     setCardPeriodMessage('');
 };
 
-const setCardErrorMessage = (message) => {
+const hasPersistentManualCardError = () => {
+    const errorNode = document.getElementById(CARD_ERROR_ID);
+    if (!errorNode) {
+        return false;
+    }
+
+    const normalizedMessage = (errorNode.textContent || '').trim();
+    return Boolean(normalizedMessage)
+        && errorNode.style.display !== 'none'
+        && errorNode.dataset.errorSource === CARD_ERROR_SOURCE_MANUAL;
+};
+
+const setCardErrorMessage = (message, options = {}) => {
+    const { source = CARD_ERROR_SOURCE_MANUAL } = options;
     const errorNode = ensureCardErrorNode();
     if (!errorNode) return;
 
     const normalizedMessage = (message || '').trim();
     errorNode.textContent = normalizedMessage;
     errorNode.style.display = normalizedMessage ? 'block' : 'none';
+
+    if (normalizedMessage) {
+        errorNode.dataset.errorSource = source;
+        return;
+    }
+
+    delete errorNode.dataset.errorSource;
 };
 
-const clearCardErrorMessage = () => {
+const clearCardErrorMessage = (options = {}) => {
+    const { preserveManual = false } = options;
+    if (preserveManual && hasPersistentManualCardError()) {
+        return;
+    }
+
     setCardErrorMessage('');
 };
 
@@ -2340,34 +2368,40 @@ const isCardErrorRelevantToServer = (errorText, context) => {
 
 const refreshCardServerError = async (context, options = {}) => {
     const { forceShowAnyError = false } = options;
+    if (hasPersistentManualCardError()) {
+        return false;
+    }
+
     if (!context?.server) {
-        clearCardErrorMessage();
+        clearCardErrorMessage({ preserveManual: true });
         return false;
     }
 
     try {
         const clientId = await getUserInputFromStorage();
         if (!clientId || clientId === 'default_value') {
-            clearCardErrorMessage();
+            clearCardErrorMessage({ preserveManual: true });
             return false;
         }
 
         const lastError = await fetchLastErrorForClient(clientId);
         if (!lastError) {
-            clearCardErrorMessage();
+            clearCardErrorMessage({ preserveManual: true });
             return false;
         }
 
         if (forceShowAnyError || isCardErrorRelevantToServer(lastError, context)) {
-            setCardErrorMessage(`Остання помилка для сервера ${context.server}${context.port ? `:${context.port}` : ''}:\n${lastError}`);
+            setCardErrorMessage(`Остання помилка для сервера ${context.server}${context.port ? `:${context.port}` : ''}:\n${lastError}`, {
+                source: CARD_ERROR_SOURCE_SERVER_POLL
+            });
             return true;
         }
 
-        clearCardErrorMessage();
+        clearCardErrorMessage({ preserveManual: true });
         return false;
     } catch (error) {
         console.error('Не вдалося отримати останню помилку для картки:', error);
-        clearCardErrorMessage();
+        clearCardErrorMessage({ preserveManual: true });
         return false;
     }
 };
@@ -2627,6 +2661,8 @@ const pollCardServerError = async (context, options = {}) => {
         return rawValue.trim();
     };
 
+    const getCardLoyaltyLogin = (scopeRoot = document) => getCardFieldText(scopeRoot, 444);
+
     const buildHelpDeskDraftTitle = (payload) => `(...) - ${payload.restaurantName || '—'}`;
 
     const buildHelpDeskDraftDescription = (payload) => ([
@@ -2773,6 +2809,25 @@ const pollCardServerError = async (context, options = {}) => {
         });
     });
 
+    const openLoyaltyPageWithCredentials = ({ login }) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+            action: 'OPEN_LOYALTY_PAGE',
+            login
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+
+            if (!response?.ok) {
+                reject(new Error(response?.error || 'Невідома помилка відкриття Loyalty.'));
+                return;
+            }
+
+            resolve(response.tabId);
+        });
+    });
+
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
@@ -2860,6 +2915,61 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
+    const createLoyaltyBtn = (scopeRoot) => {
+        const btn = document.createElement('button');
+        btn.id = LOYALTY_BUTTON_ID;
+        btn.textContent = 'Loyalty';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #db2777;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+        btn.addEventListener('mouseenter', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '1';
+            }
+        });
+        btn.addEventListener('click', async () => {
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            const loyaltyLogin = getCardLoyaltyLogin(currentScopeRoot);
+
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
+
+            if (!loyaltyLogin) {
+                setCardErrorMessage('Не знайдено логін для Loyalty. Якщо дізнаєтесь його, прошу повідомити будь ласка');
+                return;
+            }
+
+            setCardActionButtonLoading(btn, true, 'Відкриваю...');
+
+            try {
+                await openLoyaltyPageWithCredentials({
+                    login: loyaltyLogin
+                });
+            } catch (error) {
+                console.error('Не вдалося відкрити Loyalty:', error);
+                setCardErrorMessage(`Не вдалося відкрити Loyalty: ${error?.message || 'невідома помилка'}`);
+            } finally {
+                setCardActionButtonLoading(btn, false);
+            }
+        });
+        return btn;
+    };
+
     const createPeriodBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'get-period-button';
@@ -2917,7 +3027,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createHelpDeskDraftBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = HELPDESK_DRAFT_BUTTON_ID;
-        btn.textContent = 'Заявка в Курву';
+        btn.textContent = 'HelpDesk';
         btn.style.cssText = `
             margin-left: 8px;
             cursor: pointer;
@@ -2996,10 +3106,11 @@ const pollCardServerError = async (context, options = {}) => {
                 gap: 6px;
                 padding: 6px 0 2px 0;
             `;
-            container.appendChild(createLicenseBtn("✓ Перевірити ліцензії", "#059669", scopeRoot));
+            container.appendChild(createLicenseBtn("Перевірити ліцензії", "#059669", scopeRoot));
             container.appendChild(createRestoBtn(scopeRoot));
             container.appendChild(createDevicesBtn(scopeRoot));
             container.appendChild(createPeriodBtn(scopeRoot));
+            container.appendChild(createLoyaltyBtn(scopeRoot));
             if (isTaskPage()) {
                 container.appendChild(createHelpDeskDraftBtn(scopeRoot));
             }
@@ -3007,6 +3118,19 @@ const pollCardServerError = async (context, options = {}) => {
             wrapperBox.after(container);
         } else if (container.previousElementSibling !== wrapperBox) {
             wrapperBox.after(container);
+        }
+
+        const existingLoyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
+        const periodButton = container.querySelector('#get-period-button');
+        if (!existingLoyaltyButton) {
+            const loyaltyButton = createLoyaltyBtn(scopeRoot);
+            if (periodButton) {
+                periodButton.after(loyaltyButton);
+            } else {
+                container.appendChild(loyaltyButton);
+            }
+        } else if (periodButton && periodButton.nextElementSibling !== existingLoyaltyButton) {
+            periodButton.after(existingLoyaltyButton);
         }
 
         const existingHelpDeskButton = container.querySelector(`#${HELPDESK_DRAFT_BUTTON_ID}`);

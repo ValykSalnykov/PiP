@@ -28,7 +28,8 @@
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
     "https://planfix-to-syrve.com:8000/*",
-    "https://pro.helpdeskeddy.com/*"
+    "https://pro.helpdeskeddy.com/*",
+    "https://loyalty.syrve.live/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -70,6 +71,15 @@
       ],
       "js": [
         "content/syrve-autofill.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://loyalty.syrve.live/*"
+      ],
+      "js": [
+        "content/loyalty-autofill.js"
       ],
       "run_at": "document_idle"
     },

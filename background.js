@@ -29,10 +29,13 @@ const log = createLogger('background', 'info');
 const TAB_STATE = new Map();
 const HEALTH_PERIOD_REQUESTS = new Map();
 const SYRVE_TAB_CREDENTIALS = new Map();
+const LOYALTY_TAB_CREDENTIALS = new Map();
 const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
 const SYRVE_CREDENTIAL_TTL_MS = 120000;
 const HELPDESK_DRAFT_REQUEST_TTL_MS = 5 * 60 * 1000;
+const LOYALTY_PAGE_URL = 'https://loyalty.syrve.live/ru-RU';
+const LOYALTY_PASSWORD = 'iikoRMS351';
 const EXTENSION_ACCESS_REQUEST_URL = 'http://daologistics.duckdns.org:8100/extension/access/request';
 const EXTENSION_ACCESS_CLAIM_URL = 'http://daologistics.duckdns.org:8100/extension/access/claim';
 const CREDENTIALS_LOOKUP_URL = 'http://daologistics.duckdns.org:8100/credentials/lookup';
@@ -1028,6 +1031,48 @@ function clearSyrveCredentialsForTab(tabId) {
   SYRVE_TAB_CREDENTIALS.delete(tabId);
 }
 
+function normalizeLoyaltyLogin(value) {
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) {
+    throw new Error('Missing Loyalty login');
+  }
+
+  return normalizedValue;
+}
+
+function cacheLoyaltyCredentialsForTab(tabId, credential) {
+  if (tabId === undefined) {
+    return;
+  }
+
+  LOYALTY_TAB_CREDENTIALS.set(tabId, {
+    login: credential.login,
+    password: credential.password,
+    expiresAt: Date.now() + SYRVE_CREDENTIAL_TTL_MS
+  });
+}
+
+function getLoyaltyCredentialsForTab(tabId) {
+  const cached = LOYALTY_TAB_CREDENTIALS.get(tabId);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    LOYALTY_TAB_CREDENTIALS.delete(tabId);
+    return null;
+  }
+
+  return {
+    login: cached.login,
+    password: cached.password
+  };
+}
+
+function clearLoyaltyCredentialsForTab(tabId) {
+  LOYALTY_TAB_CREDENTIALS.delete(tabId);
+}
+
 chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command !== 'toggle-pip') return;
 
@@ -1128,6 +1173,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then((tabId) => sendResponse({ ok: true, tabId }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open Syrve page' }));
+
+    return true;
+  }
+
+  if (message?.action === 'OPEN_LOYALTY_PAGE') {
+    if (!message.login) {
+      sendResponse({ ok: false, error: 'Missing Loyalty login' });
+      return false;
+    }
+
+    openLoyaltyPage({
+      login: message.login,
+      active: message.active !== false
+    })
+      .then((tabId) => sendResponse({ ok: true, tabId }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open Loyalty page' }));
 
     return true;
   }
@@ -1274,6 +1335,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message?.action === 'GET_LOYALTY_CREDENTIALS') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) {
+      sendResponse({ ok: false, error: 'Missing tab id' });
+      return false;
+    }
+
+    const credentials = getLoyaltyCredentialsForTab(tabId);
+    if (!credentials) {
+      sendResponse({ ok: false, error: 'Credentials для Loyalty для цієї вкладки не знайдено або час очікування сплив.' });
+      return false;
+    }
+
+    sendResponse({ ok: true, credential: credentials });
+    return false;
+  }
+
   if (message?.action === 'CHECK_SYRVE_LICENSE') {
     if (!message.address || message.port === undefined || message.port === null || message.port === '') {
       sendResponse({ ok: false, error: 'Missing address or port' });
@@ -1325,6 +1403,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 
   clearSyrveCredentialsForTab(tabId);
+  clearLoyaltyCredentialsForTab(tabId);
 
   const request = HEALTH_PERIOD_REQUESTS.get(tabId);
   if (request) {
@@ -1480,6 +1559,29 @@ async function openSyrvePage({ server, path, port, active = true }) {
     server,
     port,
     path,
+    active
+  });
+
+  return createdTab.id;
+}
+
+async function openLoyaltyPage({ login, active = true }) {
+  const credential = {
+    login: normalizeLoyaltyLogin(login),
+    password: LOYALTY_PASSWORD
+  };
+  const createdTab = await chrome.tabs.create({
+    url: LOYALTY_PAGE_URL,
+    active
+  });
+
+  if (createdTab.id === undefined) {
+    throw new Error('Loyalty tab was created without an id');
+  }
+
+  cacheLoyaltyCredentialsForTab(createdTab.id, credential);
+  log.info('Opened Loyalty page with tab-scoped credentials', {
+    serviceTabId: createdTab.id,
     active
   });
 

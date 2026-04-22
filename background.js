@@ -40,6 +40,7 @@ const EXTENSION_ACCESS_REQUEST_URL = 'http://daologistics.duckdns.org:8100/exten
 const EXTENSION_ACCESS_CLAIM_URL = 'http://daologistics.duckdns.org:8100/extension/access/claim';
 const CREDENTIALS_LOOKUP_URL = 'http://daologistics.duckdns.org:8100/credentials/lookup';
 const SERVER_AVAILABILITY_URL = 'http://daologistics.duckdns.org:8100/server/availability';
+const SERVER_WEB_URL_URL = 'http://daologistics.duckdns.org:8100/server/web-url';
 const LICENSE_CHECK_URL = 'http://daologistics.duckdns.org:8100/license/check';
 const HELPDESK_DRAFT_URL_BASE = 'https://pro.helpdeskeddy.com/ua/ticket/list/filter/id/352/ticket/create/draft/';
 const STORAGE_KEYS = {
@@ -468,6 +469,18 @@ function normalizeServerAvailabilityPort(value) {
   );
 }
 
+function normalizeServerWebUrlAddress(value) {
+  return normalizeProtectedServerAddress(value, 'Некоректна адреса сервера для отримання веб-адреси.');
+}
+
+function normalizeServerWebUrlPort(value) {
+  return normalizeProtectedServerPort(
+    value,
+    'Некоректний порт сервера для отримання веб-адреси.',
+    'Порт сервера для отримання веб-адреси має бути в межах від 1 до 65535.'
+  );
+}
+
 function buildLicenseCheckErrorMessage(status, payload) {
   const serverMessage = extractServerMessage(payload);
 
@@ -503,6 +516,23 @@ function buildServerAvailabilityErrorMessage(status, payload) {
       return 'Сервер перевірки доступності не налаштований або має внутрішню помилку.';
     default:
       return serverMessage || `Сервер перевірки доступності повернув помилку зі статусом ${status}.`;
+  }
+}
+
+function buildServerWebUrlErrorMessage(status, payload) {
+  const serverMessage = extractServerMessage(payload);
+
+  switch (status) {
+    case 400:
+      return serverMessage || 'Сервер веб-адреси відхилив адресу або порт.';
+    case 401:
+      return 'Розширення не передало X-Extension-Key для отримання веб-адреси. Завершіть доступ пристрою у popup.';
+    case 403:
+      return 'Персональний доступ цього пристрою до отримання веб-адреси недійсний або відкликаний. Попросіть адміністратора видати новий код підтвердження.';
+    case 500:
+      return 'Сервер отримання веб-адреси не налаштований або має внутрішню помилку.';
+    default:
+      return serverMessage || `Сервер отримання веб-адреси повернув помилку зі статусом ${status}.`;
   }
 }
 
@@ -998,6 +1028,65 @@ async function fetchServerAvailability({ address, port }) {
   return normalizedResult;
 }
 
+async function fetchServerWebUrl({ address, port }) {
+  const { userId, extensionKey } = await getProtectedRouteAuthContext();
+
+  const normalizedAddress = normalizeServerWebUrlAddress(address);
+  const normalizedPort = normalizeServerWebUrlPort(port);
+
+  let response;
+  try {
+    response = await fetch(SERVER_WEB_URL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Key': extensionKey,
+        'X-User-Id': userId
+      },
+      body: JSON.stringify({
+        address: normalizedAddress,
+        port: normalizedPort
+      })
+    });
+  } catch (error) {
+    throw new Error('Не вдалося звернутися до сервера отримання веб-адреси. Перевірте мережу та доступність сервера.');
+  }
+
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 403) {
+      await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
+    }
+
+    throw new Error(buildServerWebUrlErrorMessage(response.status, payload));
+  }
+
+  const result = payload?.result;
+  if (!result || typeof result !== 'object') {
+    throw new Error('Сервер отримання веб-адреси повернув некоректну відповідь.');
+  }
+
+  if (result.status === 'ok') {
+    const url = typeof result.url === 'string' ? result.url.trim() : '';
+    if (!url) {
+      throw new Error('Сервер отримання веб-адреси повернув некоректну відповідь.');
+    }
+
+    return {
+      status: 'ok',
+      url
+    };
+  }
+
+  if (result.status === 'warning') {
+    const message = typeof result.message === 'string' ? result.message.trim() : '';
+    throw new Error(message || 'Ще не дізнались адресу, працюємо над цим');
+  }
+
+  throw new Error('Сервер отримання веб-адреси повернув некоректну відповідь.');
+}
+
 function cacheSyrveCredentialsForTab(tabId, credential) {
   if (tabId === undefined) {
     return;
@@ -1384,6 +1473,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.action === 'OPEN_SERVER_WEB_URL') {
+    if (!message.server || message.port === undefined || message.port === null || message.port === '') {
+      sendResponse({ ok: false, error: 'Missing server or port' });
+      return false;
+    }
+
+    openServerWebUrl({
+      address: message.server,
+      port: message.port,
+      active: message.active !== false
+    })
+      .then((tabId) => sendResponse({ ok: true, tabId }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open server web URL' }));
+
+    return true;
+  }
+
   if (message?.action === 'SYRVE_HEALTH_PERIOD_RESULT') {
     const serviceTabId = sender.tab?.id;
     if (serviceTabId === undefined) return false;
@@ -1582,6 +1688,27 @@ async function openLoyaltyPage({ login, active = true }) {
   cacheLoyaltyCredentialsForTab(createdTab.id, credential);
   log.info('Opened Loyalty page with tab-scoped credentials', {
     serviceTabId: createdTab.id,
+    active
+  });
+
+  return createdTab.id;
+}
+
+async function openServerWebUrl({ address, port, active = true }) {
+  const result = await fetchServerWebUrl({ address, port });
+  const createdTab = await chrome.tabs.create({
+    url: result.url,
+    active
+  });
+
+  if (createdTab.id === undefined) {
+    throw new Error('Web tab was created without an id');
+  }
+
+  log.info('Opened server web URL tab', {
+    serviceTabId: createdTab.id,
+    address,
+    port,
     active
   });
 

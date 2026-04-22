@@ -399,6 +399,7 @@ const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
 const LOYALTY_BUTTON_ID = 'open-loyalty-button';
+const WEB_BUTTON_ID = 'open-server-web-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
@@ -950,6 +951,17 @@ const setCardActionButtonLoading = (button, isLoading, loadingLabel = '') => {
     button.style.cursor = isLoading ? 'wait' : 'pointer';
     button.style.opacity = isLoading ? '0.82' : '1';
     button.textContent = isLoading && loadingLabel ? loadingLabel : button.dataset.defaultLabel;
+};
+
+const applyCompactCardActionButtonStyle = (button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    button.style.marginLeft = '0';
+    button.style.padding = '3px 8px';
+    button.style.fontSize = '12px';
+    button.style.flex = '0 0 auto';
 };
 
 const resetActiveHelpDeskDraftButton = () => {
@@ -2828,6 +2840,26 @@ const pollCardServerError = async (context, options = {}) => {
         });
     });
 
+    const openServerWebUrl = ({ server, port }) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+            action: 'OPEN_SERVER_WEB_URL',
+            server,
+            port
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+
+            if (!response?.ok) {
+                reject(new Error(response?.error || 'Невідома помилка відкриття веб-адреси.'));
+                return;
+            }
+
+            resolve(response.tabId);
+        });
+    });
+
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
@@ -2970,6 +3002,57 @@ const pollCardServerError = async (context, options = {}) => {
         return btn;
     };
 
+    const createWebBtn = (scopeRoot) => {
+        const btn = document.createElement('button');
+        btn.id = WEB_BUTTON_ID;
+        btn.textContent = 'Веб';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #0f766e;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+        btn.addEventListener('mouseenter', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '1';
+            }
+        });
+        btn.addEventListener('click', async () => {
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            const serverData = getServerData(currentScopeRoot, true);
+            if (!serverData) return;
+
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
+            setCardActionButtonLoading(btn, true, 'Відкриваю...');
+
+            try {
+                await openServerWebUrl({
+                    server: serverData.server,
+                    port: serverData.port
+                });
+            } catch (error) {
+                console.error('Не вдалося відкрити веб-адресу сервера:', error);
+                setCardErrorMessage(error?.message || 'Не вдалося відкрити веб-адресу сервера.');
+            } finally {
+                setCardActionButtonLoading(btn, false);
+            }
+        });
+        return btn;
+    };
+
     const createPeriodBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'get-period-button';
@@ -3099,18 +3182,12 @@ const pollCardServerError = async (context, options = {}) => {
         if (!container) {
             container = document.createElement('div');
             container.id = BUTTONS_ID;
-            container.style.cssText = `
-                display: flex;
-                align-items: center;
-                flex-wrap: wrap;
-                gap: 6px;
-                padding: 6px 0 2px 0;
-            `;
             container.appendChild(createLicenseBtn("Перевірити ліцензії", "#059669", scopeRoot));
             container.appendChild(createRestoBtn(scopeRoot));
             container.appendChild(createDevicesBtn(scopeRoot));
             container.appendChild(createPeriodBtn(scopeRoot));
             container.appendChild(createLoyaltyBtn(scopeRoot));
+            container.appendChild(createWebBtn(scopeRoot));
             if (isTaskPage()) {
                 container.appendChild(createHelpDeskDraftBtn(scopeRoot));
             }
@@ -3119,6 +3196,15 @@ const pollCardServerError = async (context, options = {}) => {
         } else if (container.previousElementSibling !== wrapperBox) {
             wrapperBox.after(container);
         }
+
+        container.style.cssText = `
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 4px 0 2px 0;
+            max-width: 100%;
+        `;
 
         const existingLoyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
         const periodButton = container.querySelector('#get-period-button');
@@ -3133,6 +3219,19 @@ const pollCardServerError = async (context, options = {}) => {
             periodButton.after(existingLoyaltyButton);
         }
 
+        const existingWebButton = container.querySelector(`#${WEB_BUTTON_ID}`);
+        const loyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
+        if (!existingWebButton) {
+            const webButton = createWebBtn(scopeRoot);
+            if (loyaltyButton) {
+                loyaltyButton.after(webButton);
+            } else {
+                container.appendChild(webButton);
+            }
+        } else if (loyaltyButton && loyaltyButton.nextElementSibling !== existingWebButton) {
+            loyaltyButton.after(existingWebButton);
+        }
+
         const existingHelpDeskButton = container.querySelector(`#${HELPDESK_DRAFT_BUTTON_ID}`);
         if (isTaskPage()) {
             if (!existingHelpDeskButton) {
@@ -3145,6 +3244,10 @@ const pollCardServerError = async (context, options = {}) => {
             }
             existingHelpDeskButton.remove();
         }
+
+        container.querySelectorAll('button').forEach((button) => {
+            applyCompactCardActionButtonStyle(button);
+        });
 
         ensureCardPeriodNode();
         ensureCardErrorNode();

@@ -1,504 +1,291 @@
 <!DOCTYPE html>
-<html>
+<html lang="uk">
 <head>
   <meta charset="utf-8">
-  <title>Planfix → Syrve</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DAO Tools+</title>
   <style>
+    :root {
+      --popup-bg: #f6f7fc;
+      --panel-bg: #ffffff;
+      --panel-border: #dde1f2;
+      --divider: #e7eaf5;
+      --text-main: #13182f;
+      --text-muted: #70779b;
+      --text-soft: #8c92af;
+      --accent: #4b49f5;
+      --accent-hover: #403de6;
+      --accent-soft: #f2f3ff;
+      --field-border: #d8ddf0;
+      --field-icon: #70779b;
+      --danger: #ff2e43;
+      --danger-soft: #fff0f2;
+      --danger-border: #ffcfd7;
+      --success: #16a34a;
+      --success-soft: #edfdf3;
+      --success-border: #bce9cb;
+      --warning: #d97706;
+      --warning-soft: #fff6e8;
+      --warning-border: #fed7aa;
+      --shadow: 0 12px 32px rgba(21, 31, 75, 0.1);
+    }
+
     *,
     *::before,
     *::after {
       box-sizing: border-box;
     }
 
+    html {
+      background: var(--popup-bg);
+    }
+
     body {
       margin: 0;
-      min-width: 360px;
-      max-width: 360px;
-      padding: 10px;
-      font-family: "Inter", "Segoe UI", Arial, sans-serif;
-      background: #f6f7fb;
-      color: #111827;
-      overflow-y: auto;
+      width: 404px;
+      min-width: 404px;
+      max-width: 404px;
+      padding: 8px;
+      background:
+        radial-gradient(circle at top left, rgba(101, 118, 255, 0.08), transparent 30%),
+        linear-gradient(180deg, #f8f9ff 0%, #f5f6fc 100%);
+      color: var(--text-main);
+      font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
     }
 
-    .popup {
-      width: 100%;
-      background: #ffffff;
-      border-radius: 14px;
-      padding: 12px;
-      display: grid;
-      gap: 10px;
-      box-shadow: 0 16px 28px rgba(79, 70, 229, 0.08);
-      border: 1px solid rgba(79, 70, 229, 0.1);
+    button,
+    input {
+      font: inherit;
     }
 
-    .popup__main {
-      display: grid;
-      gap: 10px;
+    button {
+      margin: 0;
     }
 
     .is-hidden {
       display: none !important;
     }
 
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .icon-sprite {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .popup {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
     .popup__header {
       display: flex;
-      flex-wrap: wrap;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      gap: 10px;
+      padding: 14px 16px 15px;
+      border-bottom: 1px solid var(--divider);
     }
 
     .popup__title-wrapper {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
       min-width: 0;
     }
 
     .popup__title {
       margin: 0;
-      font-size: 1rem;
+      font-size: 1.08rem;
+      line-height: 1.08;
+      letter-spacing: -0.04em;
       font-weight: 700;
+      color: var(--text-main);
     }
 
-    .disco-ball {
-      width: 20px;
-      height: 20px;
-      cursor: pointer;
-      position: relative;
-      transition: transform 0.3s ease;
-    }
-
-    .disco-ball:hover {
-      transform: scale(1.1);
-    }
-
-    .disco-ball::before {
-      content: "🪩";
-      font-size: 20px;
-      display: block;
-    }
-
-    .disco-ball.active {
-      animation: disco-glow 1.5s ease-in-out infinite;
-      filter: drop-shadow(0 0 8px rgba(255, 0, 128, 0.8)) drop-shadow(0 0 12px rgba(64, 224, 208, 0.6));
-    }
-
-    @keyframes disco-glow {
-      0%, 100% {
-        filter: drop-shadow(0 0 8px rgba(255, 0, 128, 0.8)) drop-shadow(0 0 12px rgba(64, 224, 208, 0.6));
-      }
-      50% {
-        filter: drop-shadow(0 0 15px rgba(255, 140, 0, 1)) drop-shadow(0 0 20px rgba(64, 224, 208, 0.9));
-      }
+    .popup__header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
     }
 
     .popup__status {
-      display: flex;
-      flex-wrap: wrap;
+      display: inline-flex;
       align-items: center;
-      justify-content: flex-end;
       gap: 6px;
-      font-size: 0.75rem;
-      color: #4338ca;
-      max-width: 100%;
-    }
-
-    .popup__status.is-hidden {
-      display: none;
+      padding: 8px 14px;
+      border-radius: 13px;
+      background: var(--accent-soft);
+      white-space: nowrap;
     }
 
     .popup__client-id-label {
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #6b7280;
+      font-size: 0.92rem;
+      line-height: 1;
+      font-weight: 500;
+      color: var(--text-muted);
     }
 
     .popup__client-id-value {
+      font-size: 0.98rem;
+      line-height: 1;
       font-weight: 700;
-      color: #4f46e5;
-      background: rgba(79, 70, 229, 0.12);
-      padding: 4px 8px;
-      border-radius: 999px;
-      overflow-wrap: anywhere;
+      color: var(--accent);
     }
 
     .popup__link-button {
-      background: none;
-      border: none;
-      color: #4338ca;
-      font-weight: 600;
-      font-size: 0.75rem;
-      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
       padding: 0;
-      text-decoration: underline;
+      border: none;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      transition: background 0.18s ease, transform 0.18s ease;
     }
 
     .popup__link-button:hover {
-      color: #312e81;
+      background: rgba(75, 73, 245, 0.08);
+      transform: translateY(-1px);
+    }
+
+    .popup__link-button svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .popup__main,
+    #accessSetupCard {
+      padding: 14px 16px 16px;
+    }
+
+    .popup__main {
+      display: grid;
+      gap: 0;
     }
 
     .card {
-      display: grid;
-      gap: 8px;
       min-width: 0;
-      border-radius: 12px;
-      border: 1px solid rgba(79, 70, 229, 0.12);
-      padding: 10px;
-      background: rgba(255, 255, 255, 0.92);
     }
 
     .card--hero {
-      background:
-        radial-gradient(circle at top right, rgba(191, 219, 254, 0.9), transparent 42%),
-        linear-gradient(160deg, rgba(238, 242, 255, 0.92), rgba(255, 255, 255, 0.98));
-      border-color: rgba(59, 130, 246, 0.18);
-    }
-
-    .card--collapsed {
-      display: none;
-    }
-
-    .card__title {
-      margin: 0;
-      font-size: 0.84rem;
-      font-weight: 600;
-      color: #4f46e5;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-
-    .field {
       display: grid;
-      gap: 4px;
-    }
-
-    .field label {
-      font-size: 0.74rem;
-      font-weight: 600;
-      color: #6b7280;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-
-    .field input {
-      min-width: 0;
-      width: 100%;
-      padding: 7px 10px;
-      border-radius: 8px;
-      border: 1px solid rgba(17, 24, 39, 0.18);
-      font-size: 0.88rem;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
-      background: #ffffff;
-    }
-
-    .field input:focus {
-      border-color: #4f46e5;
-      outline: none;
-      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
-    }
-
-    .field input[type="color"] {
-      min-height: 38px;
-      padding: 4px;
-      cursor: pointer;
-    }
-
-    .field input[type="color"]:disabled {
-      cursor: not-allowed;
-      opacity: 0.65;
-      background: #f3f4f6;
-    }
-
-    .field__note {
-      margin: 0;
-      font-size: 0.7rem;
-      color: #9ca3af;
-      line-height: 1.45;
-    }
-
-    .highlight-settings {
-      display: grid;
-      gap: 8px;
-      padding: 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(79, 70, 229, 0.12);
-      background: rgba(79, 70, 229, 0.04);
-    }
-
-    .highlight-settings--disabled {
-      border-color: rgba(148, 163, 184, 0.18);
-      background: rgba(148, 163, 184, 0.08);
-    }
-
-    .highlight-settings__toggle {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      cursor: pointer;
-    }
-
-    .highlight-settings__copy {
-      display: grid;
-      gap: 2px;
-      min-width: 0;
-    }
-
-    .highlight-settings__title {
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: #111827;
-      line-height: 1.35;
-    }
-
-    .highlight-settings__hint {
-      font-size: 0.72rem;
-      color: #6b7280;
-      line-height: 1.4;
-    }
-
-    .highlight-settings__toggle input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      margin: 0;
-      flex-shrink: 0;
-      accent-color: #4f46e5;
-    }
-
-    .collapsible-card {
-      gap: 0;
-      padding: 0;
-      overflow: hidden;
-    }
-
-    .collapsible-card[open] {
-      padding-bottom: 10px;
-    }
-
-    .collapsible-card__summary {
-      list-style: none;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      cursor: pointer;
-      padding: 10px;
-      user-select: none;
-    }
-
-    .collapsible-card__summary::-webkit-details-marker {
-      display: none;
-    }
-
-    .collapsible-card__summary:hover {
-      background: rgba(79, 70, 229, 0.04);
-    }
-
-    .collapsible-card__chevron {
-      width: 10px;
-      height: 10px;
-      border-right: 2px solid #6b7280;
-      border-bottom: 2px solid #6b7280;
-      transform: rotate(45deg);
-      transition: transform 0.15s ease;
-      flex-shrink: 0;
-      margin-right: 4px;
-    }
-
-    .collapsible-card[open] .collapsible-card__chevron {
-      transform: rotate(225deg);
-      margin-top: 4px;
-    }
-
-    .collapsible-card__body {
-      display: grid;
-      gap: 8px;
-      padding: 0 10px;
-    }
-
-    .fields-inline {
-      display: grid;
-      gap: 8px;
-    }
-
-    .button {
-      width: 100%;
-      padding: 8px 12px;
-      border-radius: 8px;
-      border: none;
-      font-weight: 600;
-      font-size: 0.88rem;
-      line-height: 1.35;
-      text-align: center;
-      white-space: normal;
-      cursor: pointer;
-      transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
-      background: #4f46e5;
-      color: #ffffff;
-      box-shadow: 0 8px 16px rgba(79, 70, 229, 0.18);
-    }
-
-    .button:hover {
-      background: #4338ca;
-      transform: translateY(-1px);
-      box-shadow: 0 10px 20px rgba(67, 56, 202, 0.2);
-    }
-
-    .button:active {
-      transform: translateY(0);
-      box-shadow: 0 6px 12px rgba(67, 56, 202, 0.16);
-    }
-
-    .button:disabled {
-      cursor: not-allowed;
-      opacity: 0.62;
-      transform: none;
-      box-shadow: none;
-    }
-
-    .button--secondary {
-      background: rgba(79, 70, 229, 0.12);
-      color: #4338ca;
-      box-shadow: none;
-      border: 1px solid rgba(79, 70, 229, 0.2);
-    }
-
-    .button--secondary:hover {
-      background: rgba(79, 70, 229, 0.2);
-    }
-
-    .card__actions {
-      display: grid;
-      gap: 8px;
-      min-width: 0;
-    }
-
-    .card__lead {
-      margin: 0;
-      font-size: 0.84rem;
-      line-height: 1.45;
-      color: #1f2937;
-    }
-
-    .card__divider {
-      border: none;
-      border-top: 1px solid rgba(79, 70, 229, 0.12);
-      margin: 2px 0;
-    }
-
-    .card__sub-label {
-      font-size: 0.72rem;
-      font-weight: 600;
-      color: #6b7280;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin: 0;
-    }
-
-    .button--grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-
-    .button--success {
-      background: #059669;
-      color: #ffffff;
-      box-shadow: 0 8px 16px rgba(5, 150, 105, 0.18);
-    }
-
-    .button--success:hover {
-      background: #047857;
-      transform: translateY(-1px);
-      box-shadow: 0 10px 20px rgba(4, 120, 87, 0.2);
-    }
-
-    .button--warning {
-      background: #d97706;
-      color: #ffffff;
-      box-shadow: 0 8px 16px rgba(217, 119, 6, 0.18);
-    }
-
-    .button--warning:hover {
-      background: #b45309;
-      transform: translateY(-1px);
-      box-shadow: 0 10px 20px rgba(180, 83, 9, 0.2);
+      gap: 12px;
     }
 
     .popup__hero-header {
       display: flex;
-      flex-wrap: wrap;
       align-items: flex-start;
       justify-content: space-between;
-      gap: 8px;
+      gap: 10px;
+    }
+
+    .card__title {
+      margin: 0;
+      font-size: 1.03rem;
+      line-height: 1.12;
+      letter-spacing: -0.04em;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .card__lead {
+      margin: 0;
+      font-size: 0.81rem;
+      line-height: 1.42;
+      color: var(--text-muted);
     }
 
     .status-pill {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 24px;
-      padding: 4px 10px;
+      min-height: 28px;
+      padding: 6px 10px;
       border-radius: 999px;
-      font-size: 0.68rem;
+      border: 1px solid transparent;
+      font-size: 0.64rem;
+      line-height: 1;
       font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.02em;
       text-transform: uppercase;
       white-space: nowrap;
     }
 
     .status-pill--neutral {
-      background: rgba(71, 85, 105, 0.12);
-      color: #334155;
+      background: #f3f5fb;
+      color: #50607d;
+      border-color: #e2e7f4;
     }
 
     .status-pill--warning {
-      background: rgba(217, 119, 6, 0.12);
-      color: #92400e;
+      background: var(--warning-soft);
+      color: var(--warning);
+      border-color: var(--warning-border);
     }
 
     .status-pill--success {
-      background: rgba(5, 150, 105, 0.12);
-      color: #065f46;
+      background: var(--success-soft);
+      color: var(--success);
+      border-color: var(--success-border);
     }
 
     .status-box {
       display: grid;
       gap: 4px;
-      padding: 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(71, 85, 105, 0.16);
-      background: rgba(248, 250, 252, 0.96);
-      color: #0f172a;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid #e2e7f4;
+      background: #f8f9ff;
+      color: #42506d;
       white-space: pre-wrap;
       word-break: break-word;
     }
 
     .status-box--neutral {
-      background: rgba(241, 245, 249, 0.92);
-      border-color: rgba(148, 163, 184, 0.28);
-      color: #334155;
+      background: #f8f9ff;
+      border-color: #e2e7f4;
+      color: #42506d;
     }
 
     .status-box--warning {
-      background: rgba(255, 247, 237, 0.96);
-      border-color: rgba(251, 146, 60, 0.28);
-      color: #9a3412;
+      background: var(--warning-soft);
+      border-color: var(--warning-border);
+      color: #b45309;
     }
 
     .status-box--success {
-      background: rgba(236, 253, 245, 0.96);
-      border-color: rgba(16, 185, 129, 0.24);
-      color: #065f46;
+      background: var(--success-soft);
+      border-color: var(--success-border);
+      color: #15803d;
     }
 
     .status-box--error {
-      background: rgba(254, 242, 242, 0.96);
-      border-color: rgba(248, 113, 113, 0.26);
-      color: #991b1b;
+      background: var(--danger-soft);
+      border-color: var(--danger-border);
+      color: #d91c31;
     }
 
     .status-box__title,
@@ -509,162 +296,765 @@
     .status-box__title {
       font-size: 0.8rem;
       font-weight: 700;
+      color: inherit;
     }
 
     .status-box__text {
-      font-size: 0.76rem;
-      line-height: 1.45;
+      font-size: 0.75rem;
+      line-height: 1.4;
+      color: inherit;
     }
 
-    .readonly-box {
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px dashed rgba(79, 70, 229, 0.28);
-      background: rgba(238, 242, 255, 0.96);
-      color: #312e81;
-      font-size: 0.78rem;
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      font-size: 0.75rem;
       font-weight: 600;
-      word-break: break-all;
+      color: var(--text-muted);
+    }
+
+    .field input {
+      width: 100%;
+      min-height: 44px;
+      padding: 0 14px;
+      border-radius: 14px;
+      border: 1px solid var(--field-border);
+      background: #ffffff;
+      color: var(--text-main);
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .field input:focus {
+      outline: none;
+      border-color: rgba(75, 73, 245, 0.42);
+      box-shadow: 0 0 0 4px rgba(75, 73, 245, 0.08);
+    }
+
+    .field input::placeholder {
+      color: var(--text-soft);
+    }
+
+    .card__actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 46px;
+      padding: 0 16px;
+      border: none;
+      border-radius: 14px;
+      background: var(--accent);
+      color: #ffffff;
+      font-size: 0.84rem;
+      line-height: 1.2;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+      box-shadow: 0 8px 18px rgba(75, 73, 245, 0.16);
+    }
+
+    .button:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 10px 22px rgba(64, 61, 230, 0.18);
+    }
+
+    .button:active {
+      transform: translateY(0);
+      box-shadow: 0 6px 14px rgba(64, 61, 230, 0.16);
+    }
+
+    .button:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .button--secondary {
+      background: #ffffff;
+      color: var(--text-main);
+      border: 1px solid var(--field-border);
+      box-shadow: none;
+    }
+
+    .button--secondary:hover {
+      background: #fafbff;
+      border-color: #cfd5ec;
+      box-shadow: none;
+    }
+
+    .button--success {
+      background: #16a34a;
+      box-shadow: 0 8px 18px rgba(22, 163, 74, 0.16);
+    }
+
+    .button--success:hover {
+      background: #15803d;
+      box-shadow: 0 10px 22px rgba(21, 128, 61, 0.18);
+    }
+
+    .card__divider {
+      margin: 2px 0 0;
+      border: none;
+      border-top: 1px solid var(--divider);
+    }
+
+    .connection-card {
+      display: grid;
+      gap: 14px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .section-heading__icon {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      color: var(--accent);
+    }
+
+    .section-heading__title {
+      margin: 0;
+      font-size: 1rem;
+      line-height: 1.12;
+      letter-spacing: -0.04em;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .fields-inline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .input-shell {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 56px;
+      padding: 0 16px;
+      border: 1px solid var(--field-border);
+      border-radius: 16px;
+      background: #ffffff;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .input-shell:focus-within {
+      border-color: rgba(75, 73, 245, 0.42);
+      box-shadow: 0 0 0 4px rgba(75, 73, 245, 0.08);
+    }
+
+    .input-shell__icon {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+      color: var(--field-icon);
+    }
+
+    .input-shell input {
+      width: 100%;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text-main);
+      font-size: 0.86rem;
+      line-height: 1.1;
+      font-weight: 500;
+      padding: 0;
+    }
+
+    .input-shell input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .button.button--launch {
+      min-height: 56px;
+      gap: 10px;
+      border-radius: 16px;
+      font-size: 0.86rem;
+      box-shadow: inset 0 -1px 0 rgba(18, 20, 42, 0.16);
+    }
+
+    .button--launch svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .inline-server-error,
+    .message-panel {
+      display: none;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--danger-border);
+      background: var(--danger-soft);
+      color: #d91c31;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.76rem;
+      line-height: 1.4;
+      max-height: 96px;
+      overflow: auto;
+    }
+
+    .inline-server-error.is-visible,
+    .message-panel.is-visible {
+      display: block;
+    }
+
+    .popup__section-divider {
+      height: 1px;
+      background: var(--divider);
+      margin: 14px 0 0;
+    }
+
+    .settings-panel {
+      display: grid;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 60px;
+      border-top: 1px solid var(--divider);
+    }
+
+    .setting-row__main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .setting-row__icon {
+      width: 23px;
+      height: 23px;
+      flex-shrink: 0;
+    }
+
+    .setting-row__icon--mode {
+      color: #68708d;
+    }
+
+    .setting-row__icon--error {
+      color: var(--danger);
+    }
+
+    .setting-row__icon--pip {
+      color: var(--accent);
+    }
+
+    .setting-row__copy {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .setting-row__title {
+      margin: 0;
+      font-size: 0.95rem;
+      line-height: 1.14;
+      letter-spacing: -0.035em;
+      font-weight: 600;
+      color: var(--text-main);
     }
 
     #modeInfo {
+      display: none;
       margin: 0;
-      font-size: 0.84rem;
-      color: #111827;
-      font-weight: 500;
+      font-size: 0.69rem;
+      line-height: 1.32;
+      color: var(--text-muted);
     }
 
-    #errorMessage {
-      margin: 0;
-      font-size: 0.78rem;
-      color: #dc2626;
-      white-space: pre-wrap;
-      background: rgba(220, 38, 38, 0.08);
-      border-radius: 8px;
-      padding: 8px 10px;
-      border: 1px solid rgba(220, 38, 38, 0.18);
+    #modeInfo.is-visible {
+      display: block;
+    }
+
+    .mode-picker {
+      position: relative;
+      min-width: 148px;
+      flex-shrink: 0;
+    }
+
+    .mode-select {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      min-height: 42px;
+      padding: 0 36px 0 14px;
+      border: 1px solid var(--field-border);
+      border-radius: 14px;
+      background: #ffffff;
+      color: var(--text-main);
+      font-size: 0.86rem;
+      line-height: 1.1;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+    }
+
+    .mode-select:hover {
+      border-color: #cfd5ec;
+      background: #fafbff;
+      transform: translateY(-1px);
+    }
+
+    .mode-select:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+      transform: none;
+    }
+
+    .mode-picker__chevron,
+    .row-action__chevron,
+    .collapsible-card__chevron {
+      width: 9px;
+      height: 9px;
+      flex-shrink: 0;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transition: transform 0.18s ease;
+    }
+
+    .mode-picker__chevron,
+    .row-action__chevron {
+      transform: rotate(45deg);
+    }
+
+    .mode-picker__chevron {
+      position: absolute;
+      top: 50%;
+      right: 14px;
+      color: #6f7696;
+      pointer-events: none;
+      transform: translateY(-60%) rotate(45deg);
+    }
+
+    .setting-row__trigger {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 60px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .setting-row__trigger:hover,
+    .collapsible-card__summary:hover {
+      color: #4f5778;
+    }
+
+    .setting-row__trigger[aria-expanded="true"] .row-action__chevron {
+      transform: rotate(225deg);
+    }
+
+    .setting-row__tail {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 4px 0 0;
+      color: #6f7696;
+      flex-shrink: 0;
+    }
+
+    .error-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 40px;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--danger-border);
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-size: 0.84rem;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .setting-row__panel {
+      margin: -2px 0 12px 35px;
     }
 
     #errorMessage:empty {
       display: none;
     }
 
-    .inline-server-error {
-      display: none;
-      margin: 0;
-      font-size: 0.78rem;
-      color: #dc2626;
-      white-space: pre-wrap;
-      background: rgba(220, 38, 38, 0.08);
-      border-radius: 8px;
-      padding: 8px 10px;
-      border: 1px solid rgba(220, 38, 38, 0.18);
+    .collapsible-card {
+      border-top: 1px solid var(--divider);
     }
 
-    .inline-server-error.is-visible {
-      display: block;
+    .collapsible-card__summary {
+      list-style: none;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 60px;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .collapsible-card__summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .collapsible-card__left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .collapsible-card__summary .card__title {
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+
+    .collapsible-card__chevron {
+      color: #6f7696;
+      transform: rotate(45deg);
+    }
+
+    .collapsible-card[open] .collapsible-card__chevron {
+      transform: rotate(225deg);
+    }
+
+    .collapsible-card__body {
+      padding: 0 0 14px 35px;
+    }
+
+    .highlight-settings {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--field-border);
+      border-radius: 14px;
+      background: #fafbff;
+      transition: opacity 0.18s ease;
+    }
+
+    .highlight-settings--disabled {
+      opacity: 0.78;
+    }
+
+    .highlight-settings__toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid #e4e8f5;
+      border-radius: 12px;
+      background: #ffffff;
+      cursor: pointer;
+    }
+
+    .highlight-settings__copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .highlight-settings__title {
+      font-size: 0.82rem;
+      line-height: 1.3;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .highlight-settings__hint {
+      font-size: 0.72rem;
+      line-height: 1.4;
+      color: var(--text-muted);
+    }
+
+    .highlight-settings__toggle input[type="checkbox"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 40px;
+      height: 24px;
+      margin: 0;
+      border-radius: 999px;
+      background: #dde2f3;
+      position: relative;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.18s ease;
+    }
+
+    .highlight-settings__toggle input[type="checkbox"]::after {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 2px 6px rgba(21, 31, 75, 0.16);
+      transition: transform 0.18s ease;
+    }
+
+    .highlight-settings__toggle input[type="checkbox"]:checked {
+      background: rgba(75, 73, 245, 0.78);
+    }
+
+    .highlight-settings__toggle input[type="checkbox"]:checked::after {
+      transform: translateX(16px);
+    }
+
+    .field input[type="color"] {
+      min-height: 42px;
+      padding: 6px;
+      cursor: pointer;
+    }
+
+    .field input[type="color"]:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      background: #f2f4fb;
     }
   </style>
 </head>
 <body>
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-server" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="6" rx="1.75" fill="none" stroke="currentColor" stroke-width="2" />
+      <rect x="3" y="14" width="18" height="6" rx="1.75" fill="none" stroke="currentColor" stroke-width="2" />
+      <circle cx="7" cy="7" r="1" fill="currentColor" />
+      <circle cx="7" cy="17" r="1" fill="currentColor" />
+      <path d="M11 7h6M11 17h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-port" viewBox="0 0 24 24">
+      <rect x="9" y="3" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2" />
+      <rect x="3" y="15" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2" />
+      <rect x="15" y="15" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M12 9v3m0 0H6v3m6-3h6v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-external-link" viewBox="0 0 24 24">
+      <path d="M14 5h5v5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M10 14 19 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+      <path d="M19 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-warning" viewBox="0 0 24 24">
+      <path d="M12 4.5 21 20H3L12 4.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M12 9.5v4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <circle cx="12" cy="17.2" r="1.1" fill="currentColor" />
+    </symbol>
+    <symbol id="i-pip" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2" />
+      <rect x="6" y="7" width="4" height="4" rx="1" fill="currentColor" />
+    </symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24">
+      <path d="M15.5 5.5 18.5 8.5M7 17l3.4-.7 8.2-8.2a1.5 1.5 0 0 0 0-2.1l-.6-.6a1.5 1.5 0 0 0-2.1 0l-8.2 8.2L7 17Z" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M20 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4.5" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <path d="M12 3 19 6v5c0 4.2-2.6 7.4-7 10-4.4-2.6-7-5.8-7-10V6l7-3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+      <path d="M9.4 12.2 11 13.8l3.8-3.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-id" viewBox="0 0 24 24">
+      <rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
+      <circle cx="8" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M13 10h4M13 14h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-key" viewBox="0 0 24 24">
+      <circle cx="8.5" cy="12" r="3.5" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M12 12h8m-3 0v3m-3-3v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+  </svg>
+
   <div class="popup">
     <header class="popup__header">
       <div class="popup__title-wrapper">
-        <div class="disco-ball" id="discoBall" title="Toggle Disco Mode"></div>
         <h1 class="popup__title">DAO Tools+</h1>
       </div>
-      <div class="popup__status is-hidden" id="clientStatus">
-        <span class="popup__client-id-label">User ID</span>
-        <span class="popup__client-id-value" id="clientIdBadge"></span>
-        <button class="popup__link-button" id="editClientBtn" type="button">Змінити</button>
+      <div class="popup__header-actions">
+        <div class="popup__status is-hidden" id="clientStatus">
+          <span class="popup__client-id-label">ID:</span>
+          <span class="popup__client-id-value" id="clientIdBadge"></span>
+        </div>
+        <button class="popup__link-button is-hidden" id="editClientBtn" type="button" aria-label="Змінити User ID">
+          <svg aria-hidden="true"><use href="#i-edit"></use></svg>
+        </button>
       </div>
     </header>
 
-    <section class="card card--hero" aria-labelledby="device-access" id="accessSetupCard">
+    <section class="card card--hero is-hidden" aria-labelledby="device-access" id="accessSetupCard">
       <div class="popup__hero-header">
-        <h2 id="device-access" class="card__title">Персональний доступ</h2>
+        <div class="section-heading">
+          <svg class="section-heading__icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+          <h2 id="device-access" class="card__title">Персональний доступ</h2>
+        </div>
         <span id="accessStatusBadge" class="status-pill status-pill--warning">Налаштування</span>
       </div>
+
       <p id="accessIntro" class="card__lead">Щоб працювати з розширенням, пристрій має пройти ручне схвалення.</p>
+
       <div id="accessStatusBox" class="status-box status-box--neutral">
         <p id="accessStatusTitle" class="status-box__title">Спочатку збережіть User ID</p>
         <p id="accessHelpText" class="status-box__text is-hidden"></p>
       </div>
+
       <div class="field">
         <label for="inputField">User ID</label>
         <input type="text" id="inputField" placeholder="Введіть User ID" autocomplete="off">
       </div>
+
       <button id="saveButton" class="button button--secondary" type="button">Зберегти User ID</button>
+
       <hr class="card__divider">
+
       <div class="card__actions">
         <button id="requestAccessButton" class="button" type="button">Запросити доступ до пристрою</button>
+
         <div class="field is-hidden" id="claimFieldGroup">
           <label for="claimCodeInput">Код підтвердження</label>
           <input type="text" id="claimCodeInput" placeholder="ABCD-EFGH-JKLM" autocomplete="off">
         </div>
+
         <button id="claimAccessButton" class="button button--success is-hidden" type="button">Активувати доступ</button>
         <button id="cancelAccessSetupButton" class="button button--secondary is-hidden" type="button">Повернутися до інструментів</button>
       </div>
+
       <div id="accessMessage" class="status-box status-box--neutral is-hidden" aria-live="polite"></div>
     </section>
 
     <div id="mainContent" class="popup__main is-hidden">
-      <section class="card" aria-labelledby="one-time">
-        <h2 id="one-time" class="card__title">Ручне відкриття сервера</h2>
+      <section class="card connection-card" aria-labelledby="one-time">
+        <div class="section-heading">
+          <svg class="section-heading__icon" aria-hidden="true"><use href="#i-server"></use></svg>
+          <h2 id="one-time" class="section-heading__title">Підключення до сервера</h2>
+        </div>
+
         <div class="fields-inline">
-          <div class="field">
-            <label for="serverField">Сервер</label>
-            <input type="text" id="serverField" placeholder="Адрес сервера">
+          <label class="sr-only" for="serverField">Адрес сервера</label>
+          <div class="input-shell">
+            <svg class="input-shell__icon" aria-hidden="true"><use href="#i-server"></use></svg>
+            <input type="text" id="serverField" placeholder="Адрес сервера" autocomplete="off">
           </div>
-          <div class="field">
-            <label for="portField">Порт</label>
-            <input type="text" id="portField" placeholder="Номер порта">
+
+          <label class="sr-only" for="portField">Номер порта</label>
+          <div class="input-shell">
+            <svg class="input-shell__icon" aria-hidden="true"><use href="#i-port"></use></svg>
+            <input type="text" id="portField" placeholder="Номер порта" autocomplete="off">
           </div>
         </div>
-        <button id="sendDataButton" class="button">Відкрити Backoffice / Chain</button>
+
+        <button id="sendDataButton" class="button button--launch" type="button">
+          <svg aria-hidden="true"><use href="#i-external-link"></use></svg>
+          <span>Відкрити Backoffice / Chain</span>
+        </button>
+
         <div id="inlineServerError" class="inline-server-error" aria-live="polite"></div>
       </section>
 
-      <section class="card" aria-labelledby="mode-management">
-        <h2 id="mode-management" class="card__title">Режим</h2>
-        <p id="modeInfo">Завантаження даних...</p>
-        <button id="toggleModeButton" class="button button--secondary">Переключити режим</button>
-      </section>
+      <div class="popup__section-divider" aria-hidden="true"></div>
 
-      <section class="card" aria-labelledby="error-info">
-        <h2 id="error-info" class="card__title">Помилки</h2>
-        <div class="card__actions">
-          <button id="showErrorButton" class="button button--secondary">Показати останню помилку</button>
-          <div id="errorMessage"></div>
-        </div>
-      </section>
-
-      <details class="card collapsible-card" aria-labelledby="pip-settings-title">
-        <summary class="collapsible-card__summary">
-          <h2 id="pip-settings-title" class="card__title">Налаштування PiP вікна</h2>
-          <span class="collapsible-card__chevron" aria-hidden="true"></span>
-        </summary>
-        <div class="collapsible-card__body">
-          <div id="taskHighlightSettings" class="highlight-settings highlight-settings--disabled">
-            <label class="highlight-settings__toggle" for="taskOverdueBlinkToggle">
-              <span class="highlight-settings__copy">
-                <span class="highlight-settings__title">Індикація прострочених задач</span>
-              </span>
-              <input id="taskOverdueBlinkToggle" type="checkbox">
-            </label>
-            <label class="highlight-settings__toggle" for="taskHighlightToggle">
-              <span class="highlight-settings__copy">
-                <span class="highlight-settings__title">Індикація нових задач у PiP</span>
-              </span>
-              <input id="taskHighlightToggle" type="checkbox">
-            </label>
-            <div class="field">
-              <label for="taskHighlightColor">Колір індикації</label>
-              <input id="taskHighlightColor" type="color" value="#2fd212" disabled>
+      <section class="settings-panel" aria-label="Налаштування">
+        <div class="setting-row">
+          <div class="setting-row__main">
+            <svg class="setting-row__icon setting-row__icon--mode" aria-hidden="true"><use href="#i-globe"></use></svg>
+            <div class="setting-row__copy">
+              <h2 class="setting-row__title">Режим</h2>
+              <p id="modeInfo">Завантаження даних...</p>
             </div>
           </div>
+
+          <div class="mode-picker">
+            <select id="modeSelect" class="mode-select" aria-label="Оберіть режим">
+              <option value="">...</option>
+            </select>
+            <span class="mode-picker__chevron" aria-hidden="true"></span>
+          </div>
         </div>
-      </details>
+
+        <div class="setting-row">
+          <button id="showErrorButton" class="setting-row__trigger" type="button" aria-controls="errorMessage" aria-expanded="false">
+            <div class="setting-row__main">
+              <svg class="setting-row__icon setting-row__icon--error" aria-hidden="true"><use href="#i-warning"></use></svg>
+              <div class="setting-row__copy">
+                <h2 class="setting-row__title">Помилки</h2>
+              </div>
+            </div>
+
+            <span class="setting-row__tail">
+              <span id="errorCountBadge" class="error-count is-hidden">1</span>
+              <span class="row-action__chevron" aria-hidden="true"></span>
+              <span class="sr-only">Показати останню помилку</span>
+            </span>
+          </button>
+        </div>
+
+        <div id="errorMessage" class="message-panel setting-row__panel" aria-live="polite"></div>
+
+        <details class="collapsible-card" aria-labelledby="pip-settings-title">
+          <summary class="collapsible-card__summary">
+            <div class="collapsible-card__left">
+              <svg class="setting-row__icon setting-row__icon--pip" aria-hidden="true"><use href="#i-pip"></use></svg>
+              <h2 id="pip-settings-title" class="card__title">Налаштування PIP вікна</h2>
+            </div>
+            <span class="setting-row__tail">
+              <span class="collapsible-card__chevron" aria-hidden="true"></span>
+            </span>
+          </summary>
+
+          <div class="collapsible-card__body">
+            <div id="taskHighlightSettings" class="highlight-settings highlight-settings--disabled">
+              <label class="highlight-settings__toggle" for="taskOverdueBlinkToggle">
+                <span class="highlight-settings__copy">
+                  <span class="highlight-settings__title">Індикація прострочених задач</span>
+                  <span class="highlight-settings__hint">Показує прострочені задачі більш помітно у PIP-вікні.</span>
+                </span>
+                <input id="taskOverdueBlinkToggle" type="checkbox">
+              </label>
+
+              <label class="highlight-settings__toggle" for="taskHighlightToggle">
+                <span class="highlight-settings__copy">
+                  <span class="highlight-settings__title">Індикація нових задач у PIP</span>
+                  <span class="highlight-settings__hint">Виділяє нові задачі окремим кольором.</span>
+                </span>
+                <input id="taskHighlightToggle" type="checkbox">
+              </label>
+
+              <div class="field">
+                <label for="taskHighlightColor">Колір індикації</label>
+                <input id="taskHighlightColor" type="color" value="#2fd212" disabled>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
     </div>
   </div>
 

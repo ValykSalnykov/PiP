@@ -17,9 +17,10 @@ const serverField = document.getElementById("serverField");
 const portField = document.getElementById("portField");
 const sendDataButton = document.getElementById("sendDataButton");
 const modeInfo = document.getElementById("modeInfo");
-const toggleModeButton = document.getElementById("toggleModeButton");
+const modeSelect = document.getElementById("modeSelect");
 const showErrorButton = document.getElementById("showErrorButton");
 const errorMessage = document.getElementById("errorMessage");
+const errorCountBadge = document.getElementById("errorCountBadge");
 const taskHighlightSettings = document.getElementById("taskHighlightSettings");
 const taskHighlightToggle = document.getElementById("taskHighlightToggle");
 const taskHighlightColorInput = document.getElementById("taskHighlightColor");
@@ -28,7 +29,6 @@ const inlineServerError = document.getElementById("inlineServerError");
 const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
 const editClientBtn = document.getElementById("editClientBtn");
-const discoBall = document.getElementById("discoBall");
 
 const STORAGE_KEYS = {
   userId: "userInput",
@@ -37,8 +37,8 @@ const STORAGE_KEYS = {
   extensionRequestId: "extensionAccessRequestId",
   extensionKey: "extensionAccessKey",
   accessNotice: "extensionAccessNotice",
-  discoMode: "discoMode",
   serverContext: "lastServerContext",
+  modeDescriptions: "modeDescriptions",
   taskHighlightEnabled: "pipTimeTrackerTaskHighlightEnabled",
   taskHighlightColor: "pipTimeTrackerTaskHighlightColor",
   taskOverdueBlinkEnabled: "pipTimeTrackerTaskOverdueBlinkEnabled"
@@ -49,6 +49,7 @@ const HTTP_ONLY_DOMAINS = ["daocloud.fun"];
 const INLINE_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const STATUS_BOX_TONES = ["neutral", "warning", "success", "error"];
 const STATUS_PILL_TONES = ["neutral", "warning", "success"];
+const MODE_TOGGLE_OPTION_VALUE = "__toggle__";
 const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
   enabled: false,
   color: "#2fd212",
@@ -58,6 +59,9 @@ const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
 let inlineErrorPollToken = 0;
 let popupAccessState = null;
 let isAccessSetupForced = false;
+let knownModeDescriptions = [];
+let currentModeDescription = "";
+let isSyncingModeSelect = false;
 
 const storageGet = (keys) => new Promise((resolve) => {
   chrome.storage.local.get(keys, (result) => {
@@ -70,6 +74,95 @@ const storageSet = (data) => new Promise((resolve) => {
     resolve();
   });
 });
+
+const normalizeModeDescription = (value) => String(value || "").trim();
+
+const getStoredModeDescriptions = (storageState = {}) => {
+  const storedValue = storageState[STORAGE_KEYS.modeDescriptions];
+  if (!Array.isArray(storedValue)) {
+    return [];
+  }
+
+  return storedValue
+    .map((value) => normalizeModeDescription(value))
+    .filter(Boolean);
+};
+
+const mergeModeDescriptions = (...groups) => {
+  const seen = new Set();
+  const descriptions = [];
+
+  groups.forEach((group) => {
+    const values = Array.isArray(group) ? group : [group];
+    values.forEach((value) => {
+      const normalizedValue = normalizeModeDescription(value);
+      if (!normalizedValue || seen.has(normalizedValue)) {
+        return;
+      }
+
+      seen.add(normalizedValue);
+      descriptions.push(normalizedValue);
+    });
+  });
+
+  return descriptions;
+};
+
+const persistKnownModeDescriptions = async (...groups) => {
+  const nextModeDescriptions = mergeModeDescriptions(knownModeDescriptions, ...groups);
+  const hasChanged = nextModeDescriptions.length !== knownModeDescriptions.length
+    || nextModeDescriptions.some((value, index) => value !== knownModeDescriptions[index]);
+
+  knownModeDescriptions = nextModeDescriptions;
+
+  if (hasChanged) {
+    await storageSet({
+      [STORAGE_KEYS.modeDescriptions]: nextModeDescriptions
+    });
+  }
+
+  return nextModeDescriptions;
+};
+
+const renderModeSelect = ({ displayValue = "--", disabled = false } = {}) => {
+  if (!modeSelect) return;
+
+  const normalizedDisplayValue = normalizeModeDescription(displayValue) || "--";
+
+  isSyncingModeSelect = true;
+  modeSelect.innerHTML = "";
+
+  if (!currentModeDescription) {
+    const placeholderOption = document.createElement("option");
+    placeholderOption.value = "";
+    placeholderOption.textContent = normalizedDisplayValue;
+    modeSelect.appendChild(placeholderOption);
+    modeSelect.value = "";
+    modeSelect.disabled = disabled;
+    isSyncingModeSelect = false;
+    return;
+  }
+
+  const options = mergeModeDescriptions(knownModeDescriptions, currentModeDescription);
+
+  options.forEach((modeDescription) => {
+    const option = document.createElement("option");
+    option.value = modeDescription;
+    option.textContent = modeDescription;
+    modeSelect.appendChild(option);
+  });
+
+  if (options.length < 2) {
+    const toggleOption = document.createElement("option");
+    toggleOption.value = MODE_TOGGLE_OPTION_VALUE;
+    toggleOption.textContent = "Інший режим";
+    modeSelect.appendChild(toggleOption);
+  }
+
+  modeSelect.value = options.includes(currentModeDescription) ? currentModeDescription : options[0] || "";
+  modeSelect.disabled = disabled;
+  isSyncingModeSelect = false;
+};
 
 const normalizeHexColor = (value, fallback = DEFAULT_TASK_HIGHLIGHT_SETTINGS.color) => {
   const normalizedValue = String(value || "").trim();
@@ -159,6 +252,47 @@ const setButtonBusy = (button, isBusy, busyLabel) => {
 
   button.disabled = isBusy;
   button.textContent = isBusy ? busyLabel : button.dataset.defaultLabel;
+};
+
+const setModeUI = ({ value = "", note = "", disabled = false } = {}) => {
+  const normalizedValue = String(value || "").trim() || "--";
+  const normalizedNote = String(note || "").trim();
+
+  currentModeDescription = normalizedValue !== "--" && normalizedValue !== "..."
+    ? normalizedValue
+    : "";
+
+  renderModeSelect({
+    displayValue: normalizedValue,
+    disabled
+  });
+
+  if (modeInfo) {
+    modeInfo.textContent = normalizedNote;
+    modeInfo.classList.toggle("is-visible", normalizedNote.length > 0);
+  }
+};
+
+const setErrorCount = (count = 0) => {
+  const normalizedCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
+
+  if (errorCountBadge) {
+    errorCountBadge.textContent = String(normalizedCount || "");
+    errorCountBadge.classList.toggle("is-hidden", normalizedCount < 1);
+  }
+};
+
+const setErrorMessage = (message = "") => {
+  if (!errorMessage) return;
+
+  const normalizedMessage = String(message || "").trim();
+  errorMessage.textContent = normalizedMessage;
+  errorMessage.classList.toggle("is-visible", normalizedMessage.length > 0);
+  showErrorButton?.setAttribute("aria-expanded", normalizedMessage.length > 0 ? "true" : "false");
+};
+
+const clearErrorMessage = () => {
+  setErrorMessage("");
 };
 
 const applyStatusTone = (element, baseClass, tone, tones) => {
@@ -611,12 +745,16 @@ const refreshInlineServerError = async (options = {}) => {
   const context = getCurrentServerContext();
 
   if (!userId || !context?.server) {
+    if (!userId) {
+      setErrorCount(0);
+    }
     clearInlineServerError();
     return false;
   }
 
   try {
     const lastError = await fetchLastError(userId);
+    setErrorCount(lastError ? 1 : 0);
 
     if (!lastError) {
       clearInlineServerError();
@@ -632,6 +770,7 @@ const refreshInlineServerError = async (options = {}) => {
     return false;
   } catch (error) {
     console.error("Error fetching inline server error:", error);
+    setErrorCount(0);
     clearInlineServerError();
     return false;
   }
@@ -770,22 +909,34 @@ const persistUserId = async () => {
 // Завантаження popup state
 (async () => {
   const result = await storageGet([
-    STORAGE_KEYS.discoMode,
     STORAGE_KEYS.serverContext,
+    STORAGE_KEYS.modeDescriptions,
     STORAGE_KEYS.taskHighlightEnabled,
     STORAGE_KEYS.taskHighlightColor,
     STORAGE_KEYS.taskOverdueBlinkEnabled
   ]);
-  const discoMode = result[STORAGE_KEYS.discoMode] || false;
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
+  knownModeDescriptions = getStoredModeDescriptions(result);
   const highlightSettings = getTaskHighlightSettings(result);
+
+  setModeUI({
+    value: "...",
+    note: "Завантаження даних...",
+    disabled: true
+  });
+  setErrorCount(0);
+  clearErrorMessage();
 
   try {
     const accessState = await fetchExtensionAccessState();
     if (accessState.userId) {
       fetchMode(accessState.userId);
     } else {
-      modeInfo.textContent = "Збережіть User ID, щоб отримати режим.";
+      setModeUI({
+        value: "--",
+        note: "Збережіть User ID, щоб отримати режим.",
+        disabled: true
+      });
     }
   } catch (error) {
     popupAccessState = {
@@ -794,6 +945,11 @@ const persistUserId = async () => {
       requestId: "",
       notice: ""
     };
+    setModeUI({
+      value: "--",
+      note: "Не вдалося отримати режим.",
+      disabled: true
+    });
     setAccessMessage(error?.message || "Не вдалося отримати стан доступу розширення.", "error");
   }
 
@@ -801,10 +957,6 @@ const persistUserId = async () => {
 
   restoreServerContext(serverContext);
   applyTaskHighlightSettingsState(highlightSettings);
-
-  if (discoMode) {
-    discoBall?.classList.add('active');
-  }
 
   await refreshInlineServerError();
 })();
@@ -999,102 +1151,186 @@ sendDataButton.addEventListener("click", () => {
 });
 
 // Отримати поточний режим
-const fetchMode = async (clientId) => {
-  try {
-    const response = await fetch("https://planfix-to-syrve.com:8000/get_mode_description/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ client_id: clientId }),
-    });
+const requestCurrentMode = async (clientId) => {
+  const response = await fetch("https://planfix-to-syrve.com:8000/get_mode_description/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
 
-    if (response.ok) {
-      const data = await response.json();
-      modeInfo.textContent = `Текущий режим: ${data.description}`;
-    } else {
-      modeInfo.textContent = "Error fetching mode.";
-    }
+  if (!response.ok) {
+    throw new Error("Не вдалося отримати режим.");
+  }
+
+  const data = await response.json();
+  return normalizeModeDescription(data.description);
+};
+
+const requestToggleMode = async (clientId) => {
+  const response = await fetch("https://planfix-to-syrve.com:8000/toggle_mode/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Не вдалося переключити режим.");
+  }
+
+  const data = await response.json();
+  return normalizeModeDescription(data.description);
+};
+
+const fetchMode = async (clientId) => {
+  if (!clientId) {
+    setModeUI({
+      value: "--",
+      note: "Збережіть User ID, щоб отримати режим.",
+      disabled: true
+    });
+    return "";
+  }
+
+  setModeUI({
+    value: currentModeDescription || "...",
+    note: "Оновлюю поточний режим...",
+    disabled: true
+  });
+
+  try {
+    const modeDescription = await requestCurrentMode(clientId);
+    await persistKnownModeDescriptions(modeDescription);
+    setModeUI({
+      value: modeDescription || "--",
+      note: "",
+      disabled: false
+    });
+    return modeDescription;
   } catch (error) {
     console.error("Error fetching mode:", error);
-    modeInfo.textContent = "Error fetching mode.";
+    setModeUI({
+      value: "--",
+      note: "Не вдалося отримати режим.",
+      disabled: false
+    });
+    return "";
   }
 };
 
-// Перемикання режиму
-toggleModeButton.addEventListener("click", async () => {
+// Зміна режиму
+modeSelect?.addEventListener("change", async () => {
+  if (isSyncingModeSelect) {
+    return;
+  }
+
   chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
     const clientId = result[STORAGE_KEYS.userId];
     if (!clientId) {
-      alert("Спочатку збережіть User ID.");
+      setModeUI({
+        value: "--",
+        note: "Збережіть User ID, щоб отримати режим.",
+        disabled: true
+      });
       return;
     }
 
-    try {
-      const response = await fetch("https://planfix-to-syrve.com:8000/toggle_mode/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: clientId }),
-      });
+    const selectedMode = normalizeModeDescription(modeSelect?.value);
+    const previousMode = currentModeDescription;
 
-      if (response.ok) {
-        const data = await response.json();
-        modeInfo.textContent = `Режим изменен на: ${data.description}`;
-        alert(`Режим успешно изменен на: ${data.description}`);
-      } else {
-        alert("Ошибка при переключении режима.");
+    if (!selectedMode || selectedMode === previousMode) {
+      setModeUI({
+        value: previousMode || "--",
+        note: "",
+        disabled: false
+      });
+      return;
+    }
+
+    setModeUI({
+      value: selectedMode === MODE_TOGGLE_OPTION_VALUE ? (previousMode || "...") : selectedMode,
+      note: "Змінюю режим...",
+      disabled: true
+    });
+
+    try {
+      if (selectedMode === MODE_TOGGLE_OPTION_VALUE) {
+        const nextModeDescription = await requestToggleMode(clientId);
+        await persistKnownModeDescriptions(previousMode, nextModeDescription);
+        setModeUI({
+          value: nextModeDescription || "--",
+          note: "",
+          disabled: false
+        });
+        return;
       }
+
+      const modeSequence = mergeModeDescriptions(previousMode, knownModeDescriptions, selectedMode);
+      const visitedModes = new Set(previousMode ? [previousMode] : []);
+      let resolvedMode = previousMode;
+
+      for (let attempt = 0; attempt < Math.max(2, modeSequence.length + 1); attempt += 1) {
+        resolvedMode = await requestToggleMode(clientId);
+        await persistKnownModeDescriptions(resolvedMode);
+
+        if (resolvedMode === selectedMode) {
+          setModeUI({
+            value: resolvedMode,
+            note: "",
+            disabled: false
+          });
+          return;
+        }
+
+        if (!resolvedMode || visitedModes.has(resolvedMode)) {
+          break;
+        }
+
+        visitedModes.add(resolvedMode);
+      }
+
+      const syncedMode = await requestCurrentMode(clientId).catch(() => "");
+      await persistKnownModeDescriptions(syncedMode);
+      setModeUI({
+        value: syncedMode || resolvedMode || previousMode || "--",
+        note: "Не вдалося вибрати потрібний режим із поточного API.",
+        disabled: false
+      });
     } catch (error) {
-      console.error("Error toggling mode:", error);
+      console.error("Error changing mode:", error);
+      const syncedMode = await requestCurrentMode(clientId).catch(() => "");
+      await persistKnownModeDescriptions(syncedMode);
+      setModeUI({
+        value: syncedMode || previousMode || "--",
+        note: error?.message || "Не вдалося переключити режим.",
+        disabled: false
+      });
     }
   });
 });
 
 // Показати останню помилку
 showErrorButton.addEventListener("click", async () => {
+  if ((errorMessage?.textContent || "").trim()) {
+    clearErrorMessage();
+    return;
+  }
+
   chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
     const clientId = result[STORAGE_KEYS.userId];
     if (!clientId) {
-      errorMessage.textContent = "Будь ласка, збережіть User ID спочатку.";
+      setErrorMessage("Будь ласка, збережіть User ID спочатку.");
       return;
     }
 
     try {
       const lastError = await fetchLastError(clientId);
-      errorMessage.textContent = lastError ? `Last error:\n${lastError}` : "No errors.";
+      setErrorCount(lastError ? 1 : 0);
+      setErrorMessage(lastError ? `Остання помилка:\n${lastError}` : "Помилок не знайдено.");
       await refreshInlineServerError();
     } catch (error) {
       console.error("Error fetching last error:", error);
-      errorMessage.textContent = "Помилка при запиті.";
+      setErrorMessage("Помилка при запиті.");
     }
   });
 });
 
-// Disco ball toggle
-discoBall?.addEventListener("click", () => {
-  chrome.storage.local.get(['discoMode'], (result) => {
-    const currentMode = result.discoMode || false;
-    const newMode = !currentMode;
-    
-    chrome.storage.local.set({ discoMode: newMode }, () => {
-      if (newMode) {
-        discoBall.classList.add('active');
-      } else {
-        discoBall.classList.remove('active');
-      }
-      
-      // Notify content script about disco mode change
-      chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-        if (tabs[0]) {
-          try {
-            chrome.tabs.sendMessage(tabs[0].id, {
-              action: 'toggleDiscoMode',
-              discoMode: newMode
-            });
-          } catch (error) {
-            // Ignore errors if content script is not loaded
-            console.debug('Could not send disco mode message:', error);
-          }
-        }
-      });
-    });
-  });
-});

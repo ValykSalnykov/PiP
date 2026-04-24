@@ -332,6 +332,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             } else {
                 removeDiscoStyle(button);
             }
+
+            syncCardLoginButtonWidth(button);
         });
         return;
     }
@@ -397,7 +399,6 @@ const getUserInputFromStorage = async () => {
 const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
-const CARD_LOGIN_STATUS_ID = 'send-data-button-status';
 const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const WEB_BUTTON_ID = 'open-server-web-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
@@ -406,9 +407,17 @@ const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
+const CARD_LOGIN_SUCCESS_RESET_MS = 1400;
 const CARD_SERVER_AVAILABILITY_CHECK_DEBOUNCE_MS = 450;
 const CARD_SERVER_AVAILABILITY_RECHECK_INTERVAL_MS = 60 * 1000;
 const CARD_LICENSE_GROUP_ORDER = ['pos', 'api', 'mobile', 'other'];
+const CARD_LOGIN_BUTTON_LABELS = [
+    'Увійти в бекофіс',
+    'Відправка...',
+    'Вхід виконується...',
+    'Готово',
+    'Довге очікування'
+];
 const CARD_LICENSE_GROUP_LABELS = {
     mobile: 'Мобільні',
     api: 'API',
@@ -2200,8 +2209,6 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
-const getCardLoginStatusNode = () => document.getElementById(CARD_LOGIN_STATUS_ID);
-
 const clearCardLoginStatusTimeout = () => {
     if (!cardLoginStatusTimeoutId) {
         return;
@@ -2217,115 +2224,168 @@ const setCardLoginButtonState = (isLoading) => {
 
     button.disabled = isLoading;
     button.style.cursor = isLoading ? 'wait' : 'pointer';
-    button.style.opacity = isLoading ? '0.82' : '1';
+    button.style.opacity = '1';
 };
 
-const syncCardLoginStatusHeight = () => {
-    const statusNode = getCardLoginStatusNode();
-    const button = document.getElementById('send-data-button');
-    if (!statusNode || !button) return;
-
-    const buttonHeight = Math.round(button.getBoundingClientRect().height);
-    if (!buttonHeight) return;
-
-    statusNode.style.height = `${buttonHeight}px`;
-    statusNode.style.minHeight = `${buttonHeight}px`;
-};
-
-const ensureCardLoginStatusNode = () => {
-    let statusNode = getCardLoginStatusNode();
-    const button = document.getElementById('send-data-button');
-
-    if (!button) {
-        statusNode?.remove();
-        return null;
-    }
-
-    if (!statusNode) {
-        statusNode = document.createElement('span');
-        statusNode.id = CARD_LOGIN_STATUS_ID;
-        statusNode.setAttribute('role', 'status');
-        statusNode.setAttribute('aria-live', 'polite');
-        statusNode.setAttribute('aria-atomic', 'true');
-        statusNode.style.cssText = `
-            display: none;
-            align-items: center;
-            gap: 6px;
-            margin-left: 8px;
-            padding: 0 8px;
-            border-radius: 999px;
-            border: 1px solid rgba(37, 99, 235, 0.16);
-            background: rgba(79, 70, 229, 0.08);
-            color: #4338ca;
-            font-size: 12px;
-            font-weight: 600;
-            line-height: 1;
-            white-space: nowrap;
-            box-sizing: border-box;
-        `;
-        button.insertAdjacentElement('afterend', statusNode);
-    } else if (statusNode.previousElementSibling !== button) {
-        button.insertAdjacentElement('afterend', statusNode);
-    }
-
-    syncCardLoginStatusHeight();
-
-    return statusNode;
-};
-
-const setCardLoginStatus = (state) => {
-    const statusNode = ensureCardLoginStatusNode();
-    if (!statusNode) return;
-
-    const stateMap = {
-        sending: {
-            icon: '⟳',
-            text: 'Відправка...',
-            background: 'rgba(79, 70, 229, 0.08)',
-            border: 'rgba(79, 70, 229, 0.18)',
-            color: '#4338ca'
-        },
-        waiting: {
-            icon: '⟳',
-            text: 'Вхід виконується...',
-            background: 'rgba(37, 99, 235, 0.08)',
-            border: 'rgba(37, 99, 235, 0.18)',
-            color: '#1d4ed8'
-        },
-        success: {
-            icon: '✓',
-            text: 'Готово',
-            background: 'rgba(5, 150, 105, 0.12)',
-            border: 'rgba(5, 150, 105, 0.2)',
-            color: '#047857'
-        },
-        timeout: {
-            icon: '⏱',
-            text: 'Довге очікування',
-            background: 'rgba(217, 119, 6, 0.12)',
-            border: 'rgba(217, 119, 6, 0.22)',
-            color: '#b45309'
-        }
-    };
-
-    const config = stateMap[state];
-    if (!config) {
-        statusNode.textContent = '';
-        statusNode.style.display = 'none';
+const syncCardLoginButtonWidth = (button) => {
+    if (!button || !document.body) {
         return;
     }
 
-    statusNode.textContent = `${config.icon} ${config.text}`;
-    statusNode.style.display = 'inline-flex';
-    statusNode.style.background = config.background;
-    statusNode.style.borderColor = config.border;
-    statusNode.style.color = config.color;
+    const computedStyle = window.getComputedStyle(button);
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) {
+        button.style.width = '190px';
+        button.style.minWidth = '190px';
+        return;
+    }
+
+    const fontStyle = computedStyle.fontStyle || 'normal';
+    const fontVariant = computedStyle.fontVariant || 'normal';
+    const fontWeight = computedStyle.fontWeight || '600';
+    const fontSize = computedStyle.fontSize || '13px';
+    const fontFamily = computedStyle.fontFamily || 'sans-serif';
+    context.font = `${fontStyle} ${fontVariant} ${fontWeight} ${fontSize} ${fontFamily}`;
+
+    const letterSpacingValue = parseFloat(computedStyle.letterSpacing);
+    const letterSpacing = Number.isFinite(letterSpacingValue) ? letterSpacingValue : 0;
+    let maxLabelWidth = 0;
+    CARD_LOGIN_BUTTON_LABELS.forEach((label) => {
+        const textWidth = context.measureText(label).width;
+        const spacingWidth = label.length > 1 ? (label.length - 1) * letterSpacing : 0;
+        maxLabelWidth = Math.max(maxLabelWidth, Math.ceil(textWidth + spacingWidth));
+    });
+
+    const horizontalPadding = parseFloat(computedStyle.paddingLeft) + parseFloat(computedStyle.paddingRight);
+    const borderWidth = parseFloat(computedStyle.borderLeftWidth) + parseFloat(computedStyle.borderRightWidth);
+    const fallbackWidth = 190;
+    const targetWidth = Math.max(fallbackWidth, Math.ceil(maxLabelWidth + horizontalPadding + borderWidth + 2));
+
+    button.style.width = `${targetWidth}px`;
+    button.style.minWidth = `${targetWidth}px`;
+}
+
+const ensureCardLoginButtonContent = () => {
+    const button = document.getElementById('send-data-button');
+    if (!button) {
+        return null;
+    }
+
+    let fillNode = button.querySelector('[data-role="card-login-fill"]');
+    let labelNode = button.querySelector('[data-role="card-login-label"]');
+
+    if (!fillNode) {
+        fillNode = document.createElement('span');
+        fillNode.setAttribute('data-role', 'card-login-fill');
+        fillNode.style.cssText = `
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: rgba(16, 185, 129, 0.92);
+            transform: scaleX(0);
+            transform-origin: left center;
+            transition: transform 1s cubic-bezier(0.23, 1, 0.32, 1), background 0.45s ease, opacity 0.35s ease, box-shadow 0.45s ease;
+            pointer-events: none;
+            opacity: 0;
+            z-index: 0;
+            will-change: transform;
+            box-shadow: inset -10px 0 18px rgba(255, 255, 255, 0.08);
+        `;
+        button.appendChild(fillNode);
+    }
+
+    if (!labelNode) {
+        labelNode = document.createElement('span');
+        labelNode.setAttribute('data-role', 'card-login-label');
+        labelNode.textContent = button.dataset.baseLabel || button.textContent.trim() || 'Увійти в бекофіс';
+        labelNode.style.cssText = `
+            position: relative;
+            z-index: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            user-select: none;
+            cursor: inherit;
+        `;
+
+        button.textContent = '';
+        button.appendChild(labelNode);
+    }
+
+    if (!button.dataset.baseLabel) {
+        button.dataset.baseLabel = labelNode.textContent.trim() || 'Увійти в бекофіс';
+    }
+
+    return { button, fillNode, labelNode };
+};
+
+const setCardLoginProgress = (state) => {
+    const content = ensureCardLoginButtonContent();
+    if (!content) return;
+
+    const { button, fillNode, labelNode } = content;
+
+    const stateMap = {
+        idle: {
+            progress: 0,
+            text: button.dataset.baseLabel || 'Увійти в бекофіс',
+            fill: 'rgba(16, 185, 129, 0.92)',
+            textColor: '#fff',
+            opacity: 0,
+            shadow: 'inset -10px 0 18px rgba(255, 255, 255, 0.08)'
+        },
+        sending: {
+            progress: 32,
+            text: 'Відправка...',
+            fill: 'rgba(22, 163, 74, 0.88)',
+            textColor: '#fff',
+            opacity: 1,
+            shadow: 'inset -16px 0 22px rgba(255, 255, 255, 0.12)'
+        },
+        waiting: {
+            progress: 74,
+            text: 'Вхід виконується...',
+            fill: 'rgba(22, 163, 74, 0.93)',
+            textColor: '#fff',
+            opacity: 1,
+            shadow: 'inset -18px 0 24px rgba(255, 255, 255, 0.14)'
+        },
+        success: {
+            progress: 100,
+            text: 'Готово',
+            fill: 'rgba(16, 185, 129, 0.96)',
+            textColor: '#fff',
+            opacity: 1,
+            shadow: 'inset -18px 0 24px rgba(255, 255, 255, 0.16)'
+        },
+        timeout: {
+            progress: 88,
+            text: 'Довге очікування',
+            fill: 'rgba(21, 128, 61, 0.94)',
+            textColor: '#fff',
+            opacity: 1,
+            shadow: 'inset -18px 0 24px rgba(255, 255, 255, 0.14)'
+        }
+    };
+
+    const config = stateMap[state] || stateMap.idle;
+
+    button.setAttribute('aria-busy', state === 'sending' || state === 'waiting' ? 'true' : 'false');
+    button.dataset.progressState = state;
+    fillNode.style.transform = `scaleX(${Math.max(0, Math.min(config.progress, 100)) / 100})`;
+    fillNode.style.background = config.fill;
+    fillNode.style.opacity = String(config.opacity);
+    fillNode.style.boxShadow = config.shadow;
+    labelNode.textContent = config.text;
+    button.style.color = config.textColor;
 };
 
 const resetCardLoginStatus = () => {
     clearCardLoginStatusTimeout();
     setCardLoginButtonState(false);
-    setCardLoginStatus('idle');
+    setCardLoginProgress('idle');
 };
 
 const invalidateCardLoginRequest = () => {
@@ -2340,8 +2400,19 @@ const scheduleCardLoginLongWait = (requestToken) => {
             return;
         }
 
-        setCardLoginStatus('timeout');
+        setCardLoginProgress('timeout');
     }, CARD_LOGIN_LONG_WAIT_MS);
+};
+
+const scheduleCardLoginSuccessReset = (requestToken) => {
+    clearCardLoginStatusTimeout();
+    cardLoginStatusTimeoutId = window.setTimeout(() => {
+        if (requestToken !== cardLoginRequestToken) {
+            return;
+        }
+
+        resetCardLoginStatus();
+    }, CARD_LOGIN_SUCCESS_RESET_MS);
 };
 
 const fetchLastErrorForClient = async (clientId) => {
@@ -2494,18 +2565,27 @@ const pollCardServerError = async (context, options = {}) => {
                     font-size: 13px;
                     background: #f87171;
                     color: #fff;
-                    transition: opacity 0.2s ease;
+                    transition: transform 0.18s ease, box-shadow 0.2s ease;
                     white-space: nowrap;
                     display: inline-flex;
                     align-items: center;
                     justify-content: center;
                     line-height: 1.2;
                     flex: 0 0 auto;
+                    position: relative;
+                    overflow: hidden;
+                    isolation: isolate;
+                    box-sizing: border-box;
                 `;
-                button.addEventListener('mouseenter', () => { button.style.opacity = '0.82'; });
+                button.dataset.baseLabel = 'Увійти в бекофіс';
+                button.addEventListener('mouseenter', () => {
+                    if (!button.disabled) {
+                        button.style.transform = 'translateY(-1px)';
+                    }
+                });
                 button.addEventListener('mouseleave', () => {
                     if (!button.disabled) {
-                        button.style.opacity = '1';
+                        button.style.transform = 'translateY(0)';
                     }
                 });
 
@@ -2514,11 +2594,15 @@ const pollCardServerError = async (context, options = {}) => {
                     if (result.discoMode) {
                         applyDiscoStyle(button);
                     }
+
+                    syncCardLoginButtonWidth(button);
                 });
 
                 // Додаємо кнопку до обгортки
                 wrapper.appendChild(button);
-                ensureCardLoginStatusNode();
+                ensureCardLoginButtonContent();
+                syncCardLoginButtonWidth(button);
+                resetCardLoginStatus();
 
                 // Додаємо обробник події для кнопки
                 button.addEventListener('click', async () => {
@@ -2555,7 +2639,7 @@ const pollCardServerError = async (context, options = {}) => {
                         console.log("Дані для надсилання:", payload);
                         clearCardLoginStatusTimeout();
                         setCardLoginButtonState(true);
-                        setCardLoginStatus('sending');
+                        setCardLoginProgress('sending');
                         scheduleCardLoginLongWait(requestToken);
 
                         // Надсилаємо POST-запит
@@ -2574,7 +2658,7 @@ const pollCardServerError = async (context, options = {}) => {
                         if (response.ok) {
                             console.log(await response.json(), response.status);
                             console.log("Дані успішно надіслано.");
-                            setCardLoginStatus('waiting');
+                            setCardLoginProgress('waiting');
                             const hasError = await pollCardServerError(finalServerContext);
 
                             if (requestToken !== cardLoginRequestToken) {
@@ -2585,11 +2669,12 @@ const pollCardServerError = async (context, options = {}) => {
                             setCardLoginButtonState(false);
 
                             if (hasError) {
-                                setCardLoginStatus('idle');
+                                setCardLoginProgress('idle');
                                 return;
                             }
 
-                            setCardLoginStatus('success');
+                            setCardLoginProgress('success');
+                            scheduleCardLoginSuccessReset(requestToken);
                         } else {
                             console.error("Помилка при надсиланні:", response.status, response.statusText);
                             await pollCardServerError(finalServerContext || serverContext, {
@@ -3344,7 +3429,6 @@ const pollCardServerError = async (context, options = {}) => {
             document.querySelectorAll(`#${BUTTONS_ID}`).forEach((node) => node.remove());
             document.querySelectorAll(`#${CARD_PERIOD_ID}`).forEach((node) => node.remove());
             document.querySelectorAll(`#${CARD_ERROR_ID}`).forEach((node) => node.remove());
-            document.querySelectorAll(`#${CARD_LOGIN_STATUS_ID}`).forEach((node) => node.remove());
             document.querySelectorAll(`[${CARD_SERVER_AVAILABILITY_ATTR}="true"]`).forEach((node) => node.remove());
             closeCardLicenseCheckModal();
             invalidateCardErrorPolling();

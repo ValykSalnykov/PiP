@@ -41,7 +41,6 @@ const EXTENSION_ACCESS_REQUEST_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/ac
 const EXTENSION_ACCESS_CLAIM_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/claim`;
 const CREDENTIALS_LOOKUP_URL = `${DAO_ACCESS_SERVER_BASE_URL}/credentials/lookup`;
 const SERVER_AVAILABILITY_URL = `${DAO_ACCESS_SERVER_BASE_URL}/server/availability`;
-const SERVER_WEB_URL_URL = `${DAO_ACCESS_SERVER_BASE_URL}/server/web-url`;
 const LICENSE_CHECK_URL = `${DAO_ACCESS_SERVER_BASE_URL}/license/check`;
 const HELPDESK_DRAFT_URL_BASE = 'https://pro.helpdeskeddy.com/ua/ticket/list/filter/id/352/ticket/create/draft/';
 const STORAGE_KEYS = {
@@ -470,16 +469,24 @@ function normalizeServerAvailabilityPort(value) {
   );
 }
 
-function normalizeServerWebUrlAddress(value) {
-  return normalizeProtectedServerAddress(value, 'Некоректна адреса сервера для отримання веб-адреси.');
-}
+function normalizeCardWebUrl(value) {
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) {
+    throw new Error('Поле Web: посилання порожнє або відсутнє.');
+  }
 
-function normalizeServerWebUrlPort(value) {
-  return normalizeProtectedServerPort(
-    value,
-    'Некоректний порт сервера для отримання веб-адреси.',
-    'Порт сервера для отримання веб-адреси має бути в межах від 1 до 65535.'
-  );
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(normalizedValue);
+  } catch (error) {
+    throw new Error('Поле Web: посилання містить некоректну адресу.');
+  }
+
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new Error('Поле Web: посилання має містити http або https адресу.');
+  }
+
+  return parsedUrl.toString();
 }
 
 function buildLicenseCheckErrorMessage(status, payload) {
@@ -517,23 +524,6 @@ function buildServerAvailabilityErrorMessage(status, payload) {
       return 'Сервер перевірки доступності не налаштований або має внутрішню помилку.';
     default:
       return serverMessage || `Сервер перевірки доступності повернув помилку зі статусом ${status}.`;
-  }
-}
-
-function buildServerWebUrlErrorMessage(status, payload) {
-  const serverMessage = extractServerMessage(payload);
-
-  switch (status) {
-    case 400:
-      return serverMessage || 'Сервер веб-адреси відхилив адресу або порт.';
-    case 401:
-      return 'Розширення не передало X-Extension-Key для отримання веб-адреси. Завершіть доступ пристрою у popup.';
-    case 403:
-      return 'Персональний доступ цього пристрою до отримання веб-адреси недійсний або відкликаний. Попросіть адміністратора видати новий код підтвердження.';
-    case 500:
-      return 'Сервер отримання веб-адреси не налаштований або має внутрішню помилку.';
-    default:
-      return serverMessage || `Сервер отримання веб-адреси повернув помилку зі статусом ${status}.`;
   }
 }
 
@@ -1029,65 +1019,6 @@ async function fetchServerAvailability({ address, port }) {
   return normalizedResult;
 }
 
-async function fetchServerWebUrl({ address, port }) {
-  const { userId, extensionKey } = await getProtectedRouteAuthContext();
-
-  const normalizedAddress = normalizeServerWebUrlAddress(address);
-  const normalizedPort = normalizeServerWebUrlPort(port);
-
-  let response;
-  try {
-    response = await fetch(SERVER_WEB_URL_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Extension-Key': extensionKey,
-        'X-User-Id': userId
-      },
-      body: JSON.stringify({
-        address: normalizedAddress,
-        port: normalizedPort
-      })
-    });
-  } catch (error) {
-    throw new Error('Не вдалося звернутися до сервера отримання веб-адреси. Перевірте мережу та доступність сервера.');
-  }
-
-  const payload = await readJsonResponse(response);
-
-  if (!response.ok) {
-    if (response.status === 403) {
-      await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
-    }
-
-    throw new Error(buildServerWebUrlErrorMessage(response.status, payload));
-  }
-
-  const result = payload?.result;
-  if (!result || typeof result !== 'object') {
-    throw new Error('Сервер отримання веб-адреси повернув некоректну відповідь.');
-  }
-
-  if (result.status === 'ok') {
-    const url = typeof result.url === 'string' ? result.url.trim() : '';
-    if (!url) {
-      throw new Error('Сервер отримання веб-адреси повернув некоректну відповідь.');
-    }
-
-    return {
-      status: 'ok',
-      url
-    };
-  }
-
-  if (result.status === 'warning') {
-    const message = typeof result.message === 'string' ? result.message.trim() : '';
-    throw new Error(message || 'Ще не дізнались адресу, працюємо над цим');
-  }
-
-  throw new Error('Сервер отримання веб-адреси повернув некоректну відповідь.');
-}
-
 function cacheSyrveCredentialsForTab(tabId, credential) {
   if (tabId === undefined) {
     return;
@@ -1474,19 +1405,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.action === 'OPEN_SERVER_WEB_URL') {
-    if (!message.server || message.port === undefined || message.port === null || message.port === '') {
-      sendResponse({ ok: false, error: 'Missing server or port' });
+  if (message?.action === 'OPEN_CARD_WEB_URL_WITH_AUTOLOGIN') {
+    if (!message.url) {
+      sendResponse({ ok: false, error: 'Missing target URL' });
       return false;
     }
 
-    openServerWebUrl({
-      address: message.server,
-      port: message.port,
+    openCardWebUrlWithSyrveCredentials({
+      url: message.url,
       active: message.active !== false
     })
       .then((tabId) => sendResponse({ ok: true, tabId }))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open server web URL' }));
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open card web URL' }));
 
     return true;
   }
@@ -1695,10 +1625,11 @@ async function openLoyaltyPage({ login, active = true }) {
   return createdTab.id;
 }
 
-async function openServerWebUrl({ address, port, active = true }) {
-  const result = await fetchServerWebUrl({ address, port });
+async function openCardWebUrlWithSyrveCredentials({ url, active = true }) {
+  const credential = await fetchSyrveCredentials();
+  const normalizedUrl = normalizeCardWebUrl(url);
   const createdTab = await chrome.tabs.create({
-    url: result.url,
+    url: normalizedUrl,
     active
   });
 
@@ -1706,10 +1637,10 @@ async function openServerWebUrl({ address, port, active = true }) {
     throw new Error('Web tab was created without an id');
   }
 
-  log.info('Opened server web URL tab', {
+  cacheSyrveCredentialsForTab(createdTab.id, credential);
+  log.info('Opened card web URL tab with tab-scoped Syrve credentials', {
     serviceTabId: createdTab.id,
-    address,
-    port,
+    url: normalizedUrl,
     active
   });
 

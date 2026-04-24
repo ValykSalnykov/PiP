@@ -2652,13 +2652,15 @@ const pollCardServerError = async (context, options = {}) => {
         return url.toString();
     };
 
-    const getCardFieldText = (scopeRoot = document, fieldId) => {
-        const normalizedFieldId = String(fieldId || '').trim();
-        if (!normalizedFieldId) {
-            return '';
-        }
+    const CARD_WEB_FIELD_ID = '472';
+    const CARD_WEB_FIELD_LABEL = 'Web: посилання';
 
-        const fieldTarget = scopeRoot.querySelector(`.field-target[f-id="${normalizedFieldId}"]`);
+    const normalizeCardFieldLabel = (value) => String(value || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    const getCardFieldValue = (fieldTarget) => {
         if (!fieldTarget) {
             return '';
         }
@@ -2670,10 +2672,66 @@ const pollCardServerError = async (context, options = {}) => {
         }
 
         const rawValue = fieldTarget.querySelector('.object-edit-field-input')?.getAttribute('data-value') || '';
-        return rawValue.trim();
+        if (rawValue.trim()) {
+            return rawValue.trim();
+        }
+
+        const inputValue = fieldTarget.querySelector('input, textarea')?.value || '';
+        return String(inputValue).trim();
+    };
+
+    const getCardFieldText = (scopeRoot = document, fieldId) => {
+        const normalizedFieldId = String(fieldId || '').trim();
+        if (!normalizedFieldId) {
+            return '';
+        }
+
+        const fieldTarget = scopeRoot.querySelector(`.field-target[f-id="${normalizedFieldId}"]`);
+        if (!fieldTarget) {
+            return '';
+        }
+
+        return getCardFieldValue(fieldTarget);
+    };
+
+    const getCardFieldTextByLabel = (scopeRoot = document, label) => {
+        const normalizedLabel = normalizeCardFieldLabel(label);
+        if (!normalizedLabel) {
+            return '';
+        }
+
+        const labelNodes = [...scopeRoot.querySelectorAll('.field-target .label__text')];
+        const matchedLabelNode = labelNodes.find((labelNode) => {
+            const labelText = normalizeCardFieldLabel(labelNode?.textContent || labelNode?.getAttribute('title') || '');
+            return labelText === normalizedLabel;
+        });
+
+        return getCardFieldValue(matchedLabelNode?.closest('.field-target'));
     };
 
     const getCardLoyaltyLogin = (scopeRoot = document) => getCardFieldText(scopeRoot, 444);
+    const getCardWebUrl = (scopeRoot = document) => getCardFieldTextByLabel(scopeRoot, CARD_WEB_FIELD_LABEL)
+        || getCardFieldText(scopeRoot, CARD_WEB_FIELD_ID);
+
+    const normalizeCardWebUrl = (value) => {
+        const normalizedValue = String(value || '').trim();
+        if (!normalizedValue || /^[\-–—]+$/.test(normalizedValue)) {
+            throw new Error('У полі Web: посилання не вказано в карточці');
+        }
+
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(normalizedValue);
+        } catch (error) {
+            throw new Error('У полі Web: посилання вказано некоректну адресу.');
+        }
+
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+            throw new Error('Поле Web: посилання має містити http або https адресу.');
+        }
+
+        return parsedUrl.toString();
+    };
 
     const buildHelpDeskDraftTitle = (payload) => `(...) - ${payload.restaurantName || '—'}`;
 
@@ -2840,11 +2898,10 @@ const pollCardServerError = async (context, options = {}) => {
         });
     });
 
-    const openServerWebUrl = ({ server, port }) => new Promise((resolve, reject) => {
+    const openCardWebUrlWithCredentials = ({ url }) => new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({
-            action: 'OPEN_SERVER_WEB_URL',
-            server,
-            port
+            action: 'OPEN_CARD_WEB_URL_WITH_AUTOLOGIN',
+            url
         }, (response) => {
             if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
@@ -3031,17 +3088,24 @@ const pollCardServerError = async (context, options = {}) => {
         });
         btn.addEventListener('click', async () => {
             const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
-            const serverData = getServerData(currentScopeRoot, true);
-            if (!serverData) return;
+            let webUrl;
+
+            try {
+                webUrl = normalizeCardWebUrl(getCardWebUrl(currentScopeRoot));
+            } catch (error) {
+                invalidateCardErrorPolling();
+                clearCardErrorMessage();
+                setCardErrorMessage(error?.message || 'Не вдалося прочитати поле Web: посилання.');
+                return;
+            }
 
             invalidateCardErrorPolling();
             clearCardErrorMessage();
             setCardActionButtonLoading(btn, true, 'Відкриваю...');
 
             try {
-                await openServerWebUrl({
-                    server: serverData.server,
-                    port: serverData.port
+                await openCardWebUrlWithCredentials({
+                    url: webUrl
                 });
             } catch (error) {
                 console.error('Не вдалося відкрити веб-адресу сервера:', error);

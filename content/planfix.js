@@ -327,11 +327,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const button = document.getElementById(buttonId);
             if (!button) return;
 
-            if (message.discoMode) {
-                applyDiscoStyle(button);
-            } else {
+            button.dataset.daoDiscoMode = message.discoMode ? 'true' : 'false';
+
+            if (!message.discoMode && button.dataset.originalStyles) {
                 removeDiscoStyle(button);
             }
+
+            setCardLoginProgress(button.dataset.progressState || 'idle');
 
             syncCardLoginButtonWidth(button);
         });
@@ -418,6 +420,136 @@ const CARD_LOGIN_BUTTON_LABELS = [
     'Готово',
     'Довге очікування'
 ];
+const PLANFIX_DARK_THEME_CLASS = 'dark-theme';
+const CARD_BUTTON_INTENTS = {
+    default: 'default',
+    login: 'login',
+    license: 'license',
+    resto: 'resto',
+    devices: 'devices',
+    loyalty: 'loyalty',
+    web: 'web',
+    period: 'period',
+    helpdesk: 'helpdesk'
+};
+const CARD_BUTTON_THEME_TOKENS = {
+    light: {
+        intents: {
+            default: {
+                background: '#475569',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            login: {
+                background: '#f87171',
+                color: '#fff',
+                border: '1px solid rgba(248, 113, 113, 0.42)',
+                boxShadow: '0 1px 2px rgba(15, 23, 42, 0.12)'
+            },
+            license: {
+                background: '#059669',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            resto: {
+                background: '#2563eb',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            devices: {
+                background: '#7c3aed',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            loyalty: {
+                background: '#db2777',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            web: {
+                background: '#0f766e',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            period: {
+                background: '#0891b2',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            helpdesk: {
+                background: '#ea580c',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            }
+        }
+    },
+    dark: {
+        intents: {
+            default: {
+                background: 'rgba(71, 85, 105, 0.78)',
+                color: '#e2e8f0',
+                border: '1px solid rgba(148, 163, 184, 0.18)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.35)'
+            },
+            login: {
+                background: 'rgba(127, 29, 29, 0.82)',
+                color: '#f8fafc',
+                border: '1px solid rgba(248, 113, 113, 0.18)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 2px 4px rgba(0, 0, 0, 0.38)'
+            },
+            license: {
+                background: 'rgba(6, 95, 70, 0.82)',
+                color: '#ecfdf5',
+                border: '1px solid rgba(52, 211, 153, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            resto: {
+                background: 'rgba(30, 64, 175, 0.8)',
+                color: '#eff6ff',
+                border: '1px solid rgba(96, 165, 250, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            devices: {
+                background: 'rgba(91, 33, 182, 0.8)',
+                color: '#f5f3ff',
+                border: '1px solid rgba(167, 139, 250, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            loyalty: {
+                background: 'rgba(157, 23, 77, 0.78)',
+                color: '#fdf2f8',
+                border: '1px solid rgba(244, 114, 182, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            web: {
+                background: 'rgba(17, 94, 89, 0.8)',
+                color: '#ecfeff',
+                border: '1px solid rgba(45, 212, 191, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            period: {
+                background: 'rgba(21, 94, 117, 0.8)',
+                color: '#ecfeff',
+                border: '1px solid rgba(103, 232, 249, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            helpdesk: {
+                background: 'rgba(154, 52, 18, 0.8)',
+                color: '#fff7ed',
+                border: '1px solid rgba(251, 146, 60, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            }
+        }
+    }
+};
 const CARD_LICENSE_GROUP_LABELS = {
     mobile: 'Мобільні',
     api: 'API',
@@ -449,6 +581,7 @@ let cardLicenseCheckRequestToken = 0;
 let activeCardLicenseCheckButton = null;
 let activeHelpDeskDraftRequestId = null;
 let activeHelpDeskDraftButton = null;
+let cardButtonThemeObserver = null;
 
 const isCardHttpOnlyHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
@@ -947,6 +1080,88 @@ const formatCardServerContextLabel = (context) => {
     return context.port ? `${context.server}:${context.port}` : context.server;
 };
 
+const isPlanfixDarkTheme = () => document.body?.classList.contains(PLANFIX_DARK_THEME_CLASS) || false;
+
+const getCardButtonThemePreset = () => CARD_BUTTON_THEME_TOKENS[isPlanfixDarkTheme() ? 'dark' : 'light'];
+
+const getCardButtonIntentTheme = (intent) => {
+    const preset = getCardButtonThemePreset();
+    return preset.intents[intent] || preset.intents[CARD_BUTTON_INTENTS.default];
+};
+
+const applyCardActionButtonTheme = (button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    const theme = getCardButtonIntentTheme(button.dataset.cardButtonIntent || CARD_BUTTON_INTENTS.default);
+    button.style.background = theme.background;
+    button.style.color = theme.color;
+    button.style.border = theme.border;
+    button.style.boxShadow = theme.boxShadow;
+    button.style.textShadow = '';
+};
+
+const applyCardLoginButtonTheme = (button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    const theme = getCardButtonIntentTheme(CARD_BUTTON_INTENTS.login);
+
+    if (button.dataset.originalStyles) {
+        removeDiscoStyle(button);
+    }
+
+    button.style.background = theme.background;
+    button.style.color = theme.color;
+    button.style.border = theme.border;
+    button.style.boxShadow = theme.boxShadow;
+    button.style.backgroundSize = '';
+    button.style.animation = '';
+    button.style.textShadow = '';
+
+    if (button.dataset.daoDiscoMode === 'true') {
+        delete button.dataset.originalStyles;
+        applyDiscoStyle(button);
+    }
+};
+
+const applyThemeToExistingCardButtons = () => {
+    const loginButton = document.getElementById('send-data-button');
+    if (loginButton) {
+        setCardLoginProgress(loginButton.dataset.progressState || 'idle');
+        syncCardLoginButtonWidth(loginButton);
+    }
+
+    document.querySelectorAll(`#${CARD_BUTTONS_ID} button`).forEach((button) => {
+        applyCompactCardActionButtonStyle(button);
+    });
+};
+
+const ensureCardButtonThemeObserver = () => {
+    if (cardButtonThemeObserver || !document.body) {
+        return;
+    }
+
+    cardButtonThemeObserver = new MutationObserver((mutations) => {
+        const hasThemeClassChange = mutations.some((mutation) => (
+            mutation.type === 'attributes' && mutation.attributeName === 'class'
+        ));
+
+        if (hasThemeClassChange) {
+            applyThemeToExistingCardButtons();
+        }
+    });
+
+    cardButtonThemeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class']
+    });
+
+    applyThemeToExistingCardButtons();
+};
+
 const setCardActionButtonLoading = (button, isLoading, loadingLabel = '') => {
     if (!(button instanceof HTMLButtonElement)) {
         return;
@@ -971,6 +1186,9 @@ const applyCompactCardActionButtonStyle = (button) => {
     button.style.padding = '3px 8px';
     button.style.fontSize = '12px';
     button.style.flex = '0 0 auto';
+    button.style.transition = 'opacity 0.2s ease, transform 0.18s ease, background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease';
+
+    applyCardActionButtonTheme(button);
 };
 
 const resetActiveHelpDeskDraftButton = () => {
@@ -2326,47 +2544,61 @@ const setCardLoginProgress = (state) => {
     if (!content) return;
 
     const { button, fillNode, labelNode } = content;
+    const isDarkTheme = isPlanfixDarkTheme();
+    const loginTheme = getCardButtonIntentTheme(CARD_BUTTON_INTENTS.login);
+
+    applyCardLoginButtonTheme(button);
 
     const stateMap = {
         idle: {
             progress: 0,
             text: button.dataset.baseLabel || 'Увійти в бекофіс',
-            fill: 'rgba(16, 185, 129, 0.92)',
-            textColor: '#fff',
+            fill: isDarkTheme ? 'rgba(16, 185, 129, 0.72)' : 'rgba(16, 185, 129, 0.92)',
+            textColor: loginTheme.color,
             opacity: 0,
-            shadow: 'inset -10px 0 18px rgba(255, 255, 255, 0.08)'
+            shadow: isDarkTheme
+                ? 'inset -10px 0 18px rgba(255, 255, 255, 0.05)'
+                : 'inset -10px 0 18px rgba(255, 255, 255, 0.08)'
         },
         sending: {
             progress: 32,
             text: 'Відправка...',
-            fill: 'rgba(22, 163, 74, 0.88)',
-            textColor: '#fff',
+            fill: isDarkTheme ? 'rgba(22, 163, 74, 0.54)' : 'rgba(22, 163, 74, 0.88)',
+            textColor: loginTheme.color,
             opacity: 1,
-            shadow: 'inset -16px 0 22px rgba(255, 255, 255, 0.12)'
+            shadow: isDarkTheme
+                ? 'inset -14px 0 20px rgba(255, 255, 255, 0.08)'
+                : 'inset -16px 0 22px rgba(255, 255, 255, 0.12)'
         },
         waiting: {
             progress: 74,
             text: 'Вхід виконується...',
-            fill: 'rgba(22, 163, 74, 0.93)',
-            textColor: '#fff',
+            fill: isDarkTheme ? 'rgba(22, 163, 74, 0.66)' : 'rgba(22, 163, 74, 0.93)',
+            textColor: loginTheme.color,
             opacity: 1,
-            shadow: 'inset -18px 0 24px rgba(255, 255, 255, 0.14)'
+            shadow: isDarkTheme
+                ? 'inset -16px 0 22px rgba(255, 255, 255, 0.09)'
+                : 'inset -18px 0 24px rgba(255, 255, 255, 0.14)'
         },
         success: {
             progress: 100,
             text: 'Готово',
-            fill: 'rgba(16, 185, 129, 0.96)',
-            textColor: '#fff',
+            fill: isDarkTheme ? 'rgba(16, 185, 129, 0.78)' : 'rgba(16, 185, 129, 0.96)',
+            textColor: loginTheme.color,
             opacity: 1,
-            shadow: 'inset -18px 0 24px rgba(255, 255, 255, 0.16)'
+            shadow: isDarkTheme
+                ? 'inset -16px 0 22px rgba(255, 255, 255, 0.1)'
+                : 'inset -18px 0 24px rgba(255, 255, 255, 0.16)'
         },
         timeout: {
             progress: 88,
             text: 'Довге очікування',
-            fill: 'rgba(21, 128, 61, 0.94)',
-            textColor: '#fff',
+            fill: isDarkTheme ? 'rgba(21, 128, 61, 0.72)' : 'rgba(21, 128, 61, 0.94)',
+            textColor: loginTheme.color,
             opacity: 1,
-            shadow: 'inset -18px 0 24px rgba(255, 255, 255, 0.14)'
+            shadow: isDarkTheme
+                ? 'inset -16px 0 22px rgba(255, 255, 255, 0.09)'
+                : 'inset -18px 0 24px rgba(255, 255, 255, 0.14)'
         }
     };
 
@@ -2379,7 +2611,9 @@ const setCardLoginProgress = (state) => {
     fillNode.style.opacity = String(config.opacity);
     fillNode.style.boxShadow = config.shadow;
     labelNode.textContent = config.text;
-    button.style.color = config.textColor;
+    if (button.dataset.daoDiscoMode !== 'true') {
+        button.style.color = config.textColor;
+    }
 };
 
 const resetCardLoginStatus = () => {
@@ -2518,6 +2752,7 @@ const pollCardServerError = async (context, options = {}) => {
 
 // Основна логіка
 (async () => {
+    ensureCardButtonThemeObserver();
     console.log("Очікуємо завантаження елемента...");
 
     try {
@@ -2578,6 +2813,8 @@ const pollCardServerError = async (context, options = {}) => {
                     box-sizing: border-box;
                 `;
                 button.dataset.baseLabel = 'Увійти в бекофіс';
+                button.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.login;
+                button.dataset.daoDiscoMode = 'false';
                 button.addEventListener('mouseenter', () => {
                     if (!button.disabled) {
                         button.style.transform = 'translateY(-1px)';
@@ -2591,9 +2828,9 @@ const pollCardServerError = async (context, options = {}) => {
 
                 // Apply disco mode if enabled
                 chrome.storage.local.get(['discoMode'], (result) => {
-                    if (result.discoMode) {
-                        applyDiscoStyle(button);
-                    }
+                    button.dataset.daoDiscoMode = result.discoMode ? 'true' : 'false';
+
+                    setCardLoginProgress(button.dataset.progressState || 'idle');
 
                     syncCardLoginButtonWidth(button);
                 });
@@ -2719,6 +2956,8 @@ const pollCardServerError = async (context, options = {}) => {
 // --- Логіка для сторінки з панеллю полів (f-id="72") ---
 (async () => {
     const BUTTONS_ID = CARD_BUTTONS_ID;
+
+    ensureCardButtonThemeObserver();
 
     const getCardScopeRoot = (element) => (
         element?.closest('.g-popup-win-scroll-content, .page-layout-block.handbook-card-container, .object-edit-win-target, .object-edit-win-location-field')
@@ -2892,6 +3131,7 @@ const pollCardServerError = async (context, options = {}) => {
 
     const createLicenseBtn = (label, color, scopeRoot) => {
         const btn = document.createElement('button');
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.license;
         btn.textContent = label;
         btn.style.cssText = `
             margin-left: 8px;
@@ -3005,6 +3245,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.resto;
         btn.textContent = 'Веб-морда';
         btn.style.cssText = `
             margin-left: 8px;
@@ -3052,6 +3293,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createDevicesBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-connections-button';
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.devices;
         btn.textContent = 'Зайняті ліцензії';
         btn.style.cssText = `
             margin-left: 8px;
@@ -3092,6 +3334,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createLoyaltyBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = LOYALTY_BUTTON_ID;
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.loyalty;
         btn.textContent = 'Loyalty';
         btn.style.cssText = `
             margin-left: 8px;
@@ -3147,6 +3390,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createWebBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = WEB_BUTTON_ID;
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.web;
         btn.textContent = 'Веб';
         btn.style.cssText = `
             margin-left: 8px;
@@ -3205,6 +3449,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createPeriodBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'get-period-button';
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.period;
         btn.textContent = 'Відкритий період';
         btn.style.cssText = `
             margin-left: 8px;
@@ -3259,6 +3504,7 @@ const pollCardServerError = async (context, options = {}) => {
     const createHelpDeskDraftBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = HELPDESK_DRAFT_BUTTON_ID;
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.helpdesk;
         btn.textContent = 'HelpDesk';
         btn.style.cssText = `
             margin-left: 8px;

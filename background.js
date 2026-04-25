@@ -39,9 +39,11 @@ const LOYALTY_PASSWORD = 'iikoRMS351';
 const DAO_ACCESS_SERVER_BASE_URL = 'https://daologistics.duckdns.org';
 const EXTENSION_ACCESS_REQUEST_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/request`;
 const EXTENSION_ACCESS_CLAIM_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/claim`;
+const EXTENSION_ACCESS_STATE_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/state`;
 const CREDENTIALS_LOOKUP_URL = `${DAO_ACCESS_SERVER_BASE_URL}/credentials/lookup`;
 const SERVER_AVAILABILITY_URL = `${DAO_ACCESS_SERVER_BASE_URL}/server/availability`;
 const LICENSE_CHECK_URL = `${DAO_ACCESS_SERVER_BASE_URL}/license/check`;
+const LICENSE_UPDATE_URL = `${DAO_ACCESS_SERVER_BASE_URL}/license/update`;
 const HELPDESK_DRAFT_URL_BASE = 'https://pro.helpdeskeddy.com/ua/ticket/list/filter/id/352/ticket/create/draft/';
 const STORAGE_KEYS = {
   userId: 'userInput',
@@ -49,6 +51,8 @@ const STORAGE_KEYS = {
   extensionClientId: 'extensionClientId',
   extensionRequestId: 'extensionAccessRequestId',
   extensionKey: 'extensionAccessKey',
+  extensionScopes: 'extensionAccessScopes',
+  bulkModeFormat: 'extensionBulkModeFormat',
   accessNotice: 'extensionAccessNotice',
   helpDeskDraftRequests: 'helpDeskDraftRequests',
   helpDeskNextDraftNumber: 'helpDeskNextDraftNumber'
@@ -527,6 +531,94 @@ function buildServerAvailabilityErrorMessage(status, payload) {
   }
 }
 
+function buildLicenseUpdateErrorMessage(status, payload) {
+  const serverMessage = extractServerMessage(payload);
+
+  switch (status) {
+    case 400:
+      return serverMessage || 'Сервер оновлення ліцензій відхилив адресу, порт або UID.';
+    case 401:
+      return 'Розширення не передало X-Extension-Key для оновлення ліцензій. Завершіть доступ пристрою у popup.';
+    case 403:
+      return 'Для цього пристрою не видано право на масове оновлення ліцензій. Увімкніть його в Users розділі SLM і перевидайте доступ пристрою.';
+    case 500:
+      return 'Сервер оновлення ліцензій не налаштований або має внутрішню помилку.';
+    case 502:
+      return 'Syrve повернув некоректну відповідь під час оновлення ліцензій.';
+    case 504:
+      return 'Syrve не відповів вчасно на оновлення ліцензій.';
+    default:
+      return serverMessage || `Сервер оновлення ліцензій повернув помилку зі статусом ${status}.`;
+  }
+}
+
+function sanitizeLicenseUpdateDiffSummary(diffSummary) {
+  if (!diffSummary || typeof diffSummary !== 'object') {
+    return null;
+  }
+
+  const normalizedSummary = {
+    newLicenses: Number.isFinite(Number(diffSummary.newLicenses)) ? Number(diffSummary.newLicenses) : 0,
+    changedValidUntil: Number.isFinite(Number(diffSummary.changedValidUntil)) ? Number(diffSummary.changedValidUntil) : 0,
+    changedCount: Number.isFinite(Number(diffSummary.changedCount)) ? Number(diffSummary.changedCount) : 0
+  };
+
+  return normalizedSummary;
+}
+
+function sanitizeLicenseValidityValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function sanitizeLicenseUpdateLicenses(licenses) {
+  if (!Array.isArray(licenses)) {
+    return [];
+  }
+
+  return licenses.reduce((result, license) => {
+    if (!license || typeof license !== 'object') {
+      return result;
+    }
+
+    const id = typeof license.id === 'string' || typeof license.id === 'number'
+      ? String(license.id).trim()
+      : '';
+    const name = typeof license.name === 'string' ? license.name.trim() : '';
+    const friendlyName = typeof license.friendlyName === 'string' ? license.friendlyName.trim() : '';
+    const groupId = typeof license.groupId === 'string' && license.groupId.trim()
+      ? license.groupId.trim()
+      : 'other';
+    const groupTitle = typeof license.groupTitle === 'string' && license.groupTitle.trim()
+      ? license.groupTitle.trim()
+      : '';
+    const countBeforeValue = Number(license.countBefore);
+    const countAfterValue = Number(license.countAfter);
+    const validUntilBefore = sanitizeLicenseValidityValue(license.validUntilBefore) || '';
+    const validUntilAfter = sanitizeLicenseValidityValue(license.validUntilAfter) || '';
+
+    if (!id && !name && !friendlyName) {
+      return result;
+    }
+
+    result.push({
+      id,
+      name,
+      friendlyName,
+      groupId,
+      groupTitle,
+      availableBefore: license.availableBefore === true,
+      availableAfter: license.availableAfter === true,
+      countBefore: Number.isFinite(countBeforeValue) ? countBeforeValue : null,
+      countAfter: Number.isFinite(countAfterValue) ? countAfterValue : null,
+      validUntilBefore,
+      validUntilAfter,
+      validUntil: validUntilAfter || validUntilBefore || ''
+    });
+
+    return result;
+  }, []);
+}
+
 function extractRequestId(payload) {
   return String(payload?.request?.requestId ?? payload?.requestId ?? '').trim();
 }
@@ -569,6 +661,55 @@ function buildAccessRequestNotice(status) {
   return 'Запит на доступ до пристрою збережено. Після ручного схвалення введіть код підтвердження у popup.';
 }
 
+function shouldClearInvalidExtensionAccess(payload) {
+  return payload?.errorCode !== 'invalid-extension-scope';
+}
+
+function normalizeExtensionAccessScopes(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set();
+  return value.reduce((result, scope) => {
+    const normalizedScope = typeof scope === 'string' ? scope.trim() : '';
+    if (!normalizedScope || seen.has(normalizedScope)) {
+      return result;
+    }
+
+    seen.add(normalizedScope);
+    result.push(normalizedScope);
+    return result;
+  }, []);
+}
+
+function hasBulkLicenseAccess(scopes) {
+  return normalizeExtensionAccessScopes(scopes).includes('license.bulk');
+}
+
+function normalizeBulkModeFormat(value) {
+  return String(value ?? '').trim().toLowerCase() === 'inline' ? 'inline' : 'legacy';
+}
+
+function extractExtensionAccessScopes(payload) {
+  return normalizeExtensionAccessScopes(payload?.access?.scopes || payload?.request?.scopes);
+}
+
+async function removeStoredExtensionAccessScope(scopeToRemove) {
+  const normalizedScope = typeof scopeToRemove === 'string' ? scopeToRemove.trim() : '';
+  if (!normalizedScope) {
+    return;
+  }
+
+  const storageData = await storageGet([STORAGE_KEYS.extensionScopes]);
+  const nextScopes = normalizeExtensionAccessScopes(storageData?.[STORAGE_KEYS.extensionScopes])
+    .filter((scope) => scope !== normalizedScope);
+
+  await storageSet({
+    [STORAGE_KEYS.extensionScopes]: nextScopes
+  });
+}
+
 function getBrowserLabel() {
   const userAgent = navigator.userAgent || '';
 
@@ -590,6 +731,8 @@ function buildExtensionAccessState(storageData) {
   const clientId = String(storageData?.[STORAGE_KEYS.extensionClientId] ?? '').trim();
   const requestId = String(storageData?.[STORAGE_KEYS.extensionRequestId] ?? '').trim();
   const extensionKey = String(storageData?.[STORAGE_KEYS.extensionKey] ?? '').trim();
+  const scopes = normalizeExtensionAccessScopes(storageData?.[STORAGE_KEYS.extensionScopes]);
+  const bulkModeFormat = normalizeBulkModeFormat(storageData?.[STORAGE_KEYS.bulkModeFormat]);
   const notice = String(storageData?.[STORAGE_KEYS.accessNotice] ?? '').trim();
 
   let status = 'needs-user';
@@ -603,20 +746,58 @@ function buildExtensionAccessState(storageData) {
     clientId,
     requestId,
     hasExtensionKey: Boolean(extensionKey),
+    scopes,
+    hasBulkLicenseAccess: Boolean(extensionKey) && hasBulkLicenseAccess(scopes),
+    bulkModeFormat,
     notice
   };
 }
 
-async function getExtensionAccessState() {
+async function getExtensionAccessState(options = {}) {
+  const { refreshRemote = true } = options;
   const storageData = await storageGet([
     STORAGE_KEYS.userId,
     STORAGE_KEYS.extensionClientId,
     STORAGE_KEYS.extensionRequestId,
     STORAGE_KEYS.extensionKey,
+    STORAGE_KEYS.extensionScopes,
+    STORAGE_KEYS.bulkModeFormat,
     STORAGE_KEYS.accessNotice
   ]);
 
-  return buildExtensionAccessState(storageData);
+  const localState = buildExtensionAccessState(storageData);
+
+  if (!refreshRemote || !localState.hasExtensionKey) {
+    return localState;
+  }
+
+  try {
+    const remoteAccessState = await fetchRemoteExtensionAccessState();
+    const remoteScopes = normalizeExtensionAccessScopes(remoteAccessState?.scopes);
+    const bulkModeFormat = normalizeBulkModeFormat(remoteAccessState?.bulkModeFormat);
+    await storageSet({
+      [STORAGE_KEYS.extensionScopes]: remoteScopes,
+      [STORAGE_KEYS.bulkModeFormat]: bulkModeFormat
+    });
+
+    return buildExtensionAccessState({
+      ...storageData,
+      [STORAGE_KEYS.extensionScopes]: remoteScopes,
+      [STORAGE_KEYS.bulkModeFormat]: bulkModeFormat
+    });
+  } catch (error) {
+    const fallbackStorageData = await storageGet([
+      STORAGE_KEYS.userId,
+      STORAGE_KEYS.extensionClientId,
+      STORAGE_KEYS.extensionRequestId,
+      STORAGE_KEYS.extensionKey,
+      STORAGE_KEYS.extensionScopes,
+      STORAGE_KEYS.bulkModeFormat,
+      STORAGE_KEYS.accessNotice
+    ]);
+
+    return buildExtensionAccessState(fallbackStorageData);
+  }
 }
 
 function clearAllSyrveCredentials() {
@@ -638,6 +819,8 @@ async function saveUserId(rawUserId) {
     keysToRemove.push(
       STORAGE_KEYS.extensionRequestId,
       STORAGE_KEYS.extensionKey,
+      STORAGE_KEYS.extensionScopes,
+      STORAGE_KEYS.bulkModeFormat,
       STORAGE_KEYS.accessNotice
     );
   }
@@ -716,12 +899,13 @@ async function requestExtensionAccess(rawUserId) {
   await storageSet({
     [STORAGE_KEYS.extensionClientId]: clientId,
     [STORAGE_KEYS.extensionRequestId]: requestId,
+    [STORAGE_KEYS.extensionScopes]: extractExtensionAccessScopes(payload),
     [STORAGE_KEYS.accessNotice]: buildAccessRequestNotice(response.status)
   });
   await storageRemove([STORAGE_KEYS.legacyApiKey]);
   clearAllSyrveCredentials();
 
-  return getExtensionAccessState();
+  return getExtensionAccessState({ refreshRemote: false });
 }
 
 async function claimExtensionKey({ requestId, claimCode }) {
@@ -766,16 +950,17 @@ async function claimExtensionKey({ requestId, claimCode }) {
   await storageSet({
     [STORAGE_KEYS.extensionRequestId]: extractRequestId(payload) || normalizedRequestId,
     [STORAGE_KEYS.extensionKey]: extensionKey,
+    [STORAGE_KEYS.extensionScopes]: extractExtensionAccessScopes(payload),
     [STORAGE_KEYS.accessNotice]: 'Персональний доступ для цього пристрою активовано.'
   });
   await storageRemove([STORAGE_KEYS.legacyApiKey]);
   clearAllSyrveCredentials();
 
-  return getExtensionAccessState();
+  return getExtensionAccessState({ refreshRemote: false });
 }
 
 async function clearInvalidExtensionKey(message) {
-  await storageRemove([STORAGE_KEYS.extensionKey, STORAGE_KEYS.accessNotice]);
+  await storageRemove([STORAGE_KEYS.extensionKey, STORAGE_KEYS.extensionScopes, STORAGE_KEYS.bulkModeFormat, STORAGE_KEYS.accessNotice]);
 
   if (message) {
     await storageSet({
@@ -809,6 +994,37 @@ async function getProtectedRouteAuthContext() {
     requestId,
     extensionKey
   };
+}
+
+async function fetchRemoteExtensionAccessState() {
+  const { userId, extensionKey } = await getProtectedRouteAuthContext();
+
+  let response;
+  try {
+    response = await fetch(EXTENSION_ACCESS_STATE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Key': extensionKey,
+        'X-User-Id': userId
+      },
+      body: JSON.stringify({})
+    });
+  } catch (error) {
+    throw new Error('Не вдалося оновити стан доступу пристрою. Перевірте мережу та доступність сервера.');
+  }
+
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 403 && shouldClearInvalidExtensionAccess(payload)) {
+      await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
+    }
+
+    throw new Error(extractServerMessage(payload) || `Сервер стану доступу повернув помилку зі статусом ${response.status}.`);
+  }
+
+  return payload?.access || {};
 }
 
 function sanitizeLicenseCheckServer(server) {
@@ -895,7 +1111,7 @@ async function fetchSyrveCredentials() {
   const payload = await readJsonResponse(response);
 
   if (!response.ok) {
-    if (response.status === 403) {
+    if (response.status === 403 && shouldClearInvalidExtensionAccess(payload)) {
       await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
     }
 
@@ -941,7 +1157,7 @@ async function fetchSyrveLicenseCheck({ address, port }) {
   const payload = await readJsonResponse(response);
 
   if (!response.ok) {
-    if (response.status === 403) {
+    if (response.status === 403 && shouldClearInvalidExtensionAccess(payload)) {
       await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
     }
 
@@ -990,7 +1206,7 @@ async function fetchServerAvailability({ address, port }) {
   const payload = await readJsonResponse(response);
 
   if (!response.ok) {
-    if (response.status === 403) {
+    if (response.status === 403 && shouldClearInvalidExtensionAccess(payload)) {
       await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
     }
 
@@ -1017,6 +1233,71 @@ async function fetchServerAvailability({ address, port }) {
   }
 
   return normalizedResult;
+}
+
+async function fetchSyrveLicenseUpdate({ address, port, batchId = null, serialNumber = null }) {
+  const { userId, extensionKey } = await getProtectedRouteAuthContext();
+
+  const normalizedAddress = normalizeLicenseServerAddress(address);
+  const normalizedPort = normalizeLicenseServerPort(port);
+  const normalizedBatchId = typeof batchId === 'string' && batchId.trim()
+    ? batchId.trim().slice(0, 128)
+    : null;
+  const normalizedSerialNumber = typeof serialNumber === 'string' && serialNumber.trim()
+    ? serialNumber.trim()
+    : null;
+
+  let response;
+  try {
+    response = await fetch(LICENSE_UPDATE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Extension-Key': extensionKey,
+        'X-User-Id': userId
+      },
+      body: JSON.stringify({
+        address: normalizedAddress,
+        port: normalizedPort,
+        batchId: normalizedBatchId,
+        serialNumber: normalizedSerialNumber
+      })
+    });
+  } catch (error) {
+    throw new Error('Не вдалося звернутися до сервера оновлення ліцензій. Перевірте мережу та доступність сервера.');
+  }
+
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok) {
+    if (response.status === 403) {
+      if (shouldClearInvalidExtensionAccess(payload)) {
+        await clearInvalidExtensionKey('Персональний доступ цього пристрою відкликано або він більше недійсний. Попросіть адміністратора видати новий код підтвердження.');
+      } else {
+        await removeStoredExtensionAccessScope('license.bulk');
+      }
+    }
+
+    throw new Error(buildLicenseUpdateErrorMessage(response.status, payload));
+  }
+
+  return {
+    address: normalizedAddress,
+    port: normalizedPort,
+    batchId: typeof payload?.batchId === 'string' && payload.batchId.trim() ? payload.batchId.trim() : normalizedBatchId,
+    operationId: typeof payload?.operationId === 'string' && payload.operationId.trim() ? payload.operationId.trim() : '',
+    resultCode: typeof payload?.resultCode === 'string' && payload.resultCode.trim() ? payload.resultCode.trim() : '',
+    outcome: typeof payload?.outcome === 'string' && payload.outcome.trim() ? payload.outcome.trim() : '',
+    correlationId: typeof payload?.correlationId === 'string' && payload.correlationId.trim() ? payload.correlationId.trim() : '',
+    statusMessage: typeof payload?.statusMessage === 'string' && payload.statusMessage.trim() ? payload.statusMessage.trim() : '',
+    verifyAttempts: Number.isFinite(Number(payload?.verifyAttempts)) ? Number(payload.verifyAttempts) : 0,
+    targetValidUntilBefore: sanitizeLicenseValidityValue(payload?.targetValidUntilBefore),
+    targetValidUntilAfter: sanitizeLicenseValidityValue(payload?.targetValidUntilAfter),
+    targetAvailableBefore: payload?.targetAvailableBefore === true,
+    targetAvailableAfter: payload?.targetAvailableAfter === true,
+    updatedTargetLicenses: sanitizeLicenseUpdateLicenses(payload?.updatedTargetLicenses),
+    diffSummary: sanitizeLicenseUpdateDiffSummary(payload?.diffSummary)
+  };
 }
 
 function cacheSyrveCredentialsForTab(tabId, credential) {
@@ -1385,6 +1666,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to check Syrve license' }));
+
+    return true;
+  }
+
+  if (message?.action === 'UPDATE_SYRVE_LICENSE') {
+    if (!message.address || message.port === undefined || message.port === null || message.port === '') {
+      sendResponse({ ok: false, error: 'Missing address or port' });
+      return false;
+    }
+
+    fetchSyrveLicenseUpdate({
+      address: message.address,
+      port: message.port,
+      batchId: message.batchId,
+      serialNumber: message.serialNumber
+    })
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to update Syrve license' }));
 
     return true;
   }

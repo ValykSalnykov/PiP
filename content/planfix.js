@@ -438,6 +438,15 @@ const CARD_LICENSE_DISPLAY_MODES = {
     cards: 'cards',
     list: 'list'
 };
+const BULK_LICENSE_ACTIONS = {
+    check: 'check',
+    update: 'update'
+};
+const BULK_LICENSE_MODE_FORMATS = {
+    legacy: 'legacy',
+    inline: 'inline'
+};
+const LEGACY_LICENSE_MANAGER_BASE = 'https://syrve-license-manager-1038989357415.us-west1.run.app/';
 const CARD_LICENSE_MODAL_SCALE_STEPS = [50, 60, 70, 80, 90, 100, 110, 120, 130];
 const CARD_LICENSE_MODAL_SCALE_DEFAULT = 100;
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
@@ -636,6 +645,7 @@ let cardButtonThemeObserver = null;
 let cardLicenseModalThemeObserver = null;
 let cardLicenseModalScaleValue = CARD_LICENSE_MODAL_SCALE_DEFAULT;
 let cardLicenseModalScaleLoadPromise = null;
+let activeBulkLicenseRun = null;
 
 const isCardHttpOnlyHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
@@ -1544,6 +1554,11 @@ const resetActiveCardLicenseCheckButton = () => {
 const closeCardLicenseCheckModal = () => {
     cardLicenseCheckRequestToken += 1;
     resetActiveCardLicenseCheckButton();
+    if (activeBulkLicenseRun?.processing) {
+        activeBulkLicenseRun.aborted = true;
+    } else {
+        activeBulkLicenseRun = null;
+    }
     const modal = document.getElementById(CARD_LICENSE_MODAL_ID);
     modal?.remove();
 };
@@ -3267,6 +3282,690 @@ const requestCardLicenseCheck = (context) => new Promise((resolve, reject) => {
     });
 });
 
+const requestCardLicenseUpdate = (context, options = {}) => new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+        action: 'UPDATE_SYRVE_LICENSE',
+        address: context?.server,
+        port: context?.port,
+        batchId: options?.batchId || null,
+        serialNumber: options?.serialNumber || null
+    }, (response) => {
+        if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+        }
+
+        if (!response?.ok) {
+            reject(new Error(response?.error || 'Невідома помилка оновлення ліцензій.'));
+            return;
+        }
+
+        resolve(response);
+    });
+});
+
+const createBulkLicenseBatchId = () => {
+    if (typeof crypto?.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const resolveBulkLicenseQueueItemTone = (item) => {
+    if (!item || item.state === 'idle') {
+        return 'warning';
+    }
+
+    if (item.state === 'processing') {
+        return 'warning';
+    }
+
+    if (item.state === 'success') {
+        return 'success';
+    }
+
+    if (item.state === 'warning') {
+        return 'warning';
+    }
+
+    return 'error';
+};
+
+const formatBulkLicenseQueueItemStateLabel = (action, item) => {
+    if (!item) {
+        return 'Очікує';
+    }
+
+    if (item.state === 'processing') {
+        return action === BULK_LICENSE_ACTIONS.update ? 'Оновлюємо' : 'Перевіряємо';
+    }
+
+    if (item.state === 'success') {
+        return action === BULK_LICENSE_ACTIONS.update ? 'Готово' : 'Перевірено';
+    }
+
+    if (item.state === 'warning') {
+        return 'Увага';
+    }
+
+    if (item.state === 'error') {
+        return 'Помилка';
+    }
+
+    return 'Очікує';
+};
+
+const BULK_LICENSE_RESULT_LABELS = Object.freeze({
+    SUCCESS: 'Ліцензії активні',
+    OK: 'Ліцензії активні',
+    ACTIVE: 'Ліцензії активні',
+    EXPIRED: 'Ліцензії прострочені',
+    NOT_VALID: 'Ліцензії невалідні',
+    INVALID: 'Ліцензії невалідні',
+    MISSED: 'Ліцензії не продовжено',
+    UPDATED_CONFIRMED: 'Оновлення підтверджено',
+    UPDATED_PARTIAL: 'Оновлення виконано частково',
+    UPDATED_NOT_CONFIRMED: 'Оновлення ще не підтверджено',
+    MANUAL_SERIAL_REQUIRED: 'Потрібен ручний UID',
+    MANUAL_SERIAL_CANCELLED: 'Введення UID скасовано',
+    HTTP_ERROR: 'Сервер тимчасово недоступний',
+    TRANSPORT_ERROR: 'Сервер недоступний',
+    AUTH_ERROR: 'Помилка авторизації',
+    XML_RESPONSE_ERROR: 'Сервер повернув помилку',
+    XML_PARSE_ERROR: 'Не вдалося обробити відповідь сервера',
+    REQUEST_FORMAT_ERROR: 'Некоректний формат запиту',
+    BUSINESS_STATUS_UNKNOWN: 'Потрібна ручна перевірка',
+    UNKNOWN_ERROR: 'Невідома помилка',
+    CHECK_OK: 'Перевірку виконано',
+    LICENSE_STATUS_EXPIRED: 'Ліцензії прострочені',
+    LICENSE_STATUS_NOT_VALID: 'Ліцензії невалідні'
+});
+
+const BULK_LICENSE_OUTCOME_LABELS = Object.freeze({
+    success: 'Успішно',
+    'not-updated': 'Без підтвердження',
+    'manual-check': 'Потрібна перевірка',
+    'server-unavailable': 'Сервер недоступний',
+    error: 'Помилка',
+    warning: 'Увага'
+});
+
+const formatBulkLicenseResultLabel = (item) => {
+    const normalizedCode = String(item?.resultCode || '').trim().toUpperCase();
+    if (normalizedCode && BULK_LICENSE_RESULT_LABELS[normalizedCode]) {
+        return BULK_LICENSE_RESULT_LABELS[normalizedCode];
+    }
+
+    const normalizedOutcome = String(item?.outcome || '').trim().toLowerCase();
+    if (normalizedOutcome && BULK_LICENSE_OUTCOME_LABELS[normalizedOutcome]) {
+        return BULK_LICENSE_OUTCOME_LABELS[normalizedOutcome];
+    }
+
+    if (item?.state === 'success') {
+        return 'Успішно';
+    }
+
+    if (item?.state === 'processing') {
+        return 'Обробка триває';
+    }
+
+    if (item?.state === 'warning') {
+        return 'Потрібна увага';
+    }
+
+    if (item?.state === 'error') {
+        return 'Помилка';
+    }
+
+    return 'Очікує обробки';
+};
+
+const formatBulkLicenseProcessedAtLabel = (value) => {
+    if (!value) {
+        return 'Ще не оброблено';
+    }
+
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.getTime())) {
+        return 'Ще не оброблено';
+    }
+
+    return parsedDate.toLocaleString('uk-UA', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+};
+
+const formatBulkLicenseValidityChip = (value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) {
+        return '';
+    }
+
+    return normalizedValue.toLowerCase().includes('перманент')
+        ? 'Перманентно'
+        : `До ${normalizedValue}`;
+};
+
+const buildBulkLicenseValiditySummary = (item) => {
+    const normalizedValiditySummary = String(item?.validitySummary || '').trim();
+    if (normalizedValiditySummary) {
+        return normalizedValiditySummary;
+    }
+
+    return '—';
+};
+
+const buildBulkLicenseDiffSummaryLabel = (diffSummary) => {
+    if (!diffSummary || typeof diffSummary !== 'object') {
+        return '';
+    }
+
+    const parts = [];
+    if ((diffSummary.newLicenses || 0) > 0) {
+        parts.push(`нових: ${diffSummary.newLicenses}`);
+    }
+    if ((diffSummary.changedValidUntil || 0) > 0) {
+        parts.push(`дат: ${diffSummary.changedValidUntil}`);
+    }
+    if ((diffSummary.changedCount || 0) > 0) {
+        parts.push(`кількості: ${diffSummary.changedCount}`);
+    }
+
+    return parts.join(' • ');
+};
+
+const resolveBulkLicenseValidityFromLicenses = (licenses, keyName) => {
+    const validityValues = Array.isArray(licenses)
+        ? [...new Set(licenses.map((license) => String(license?.[keyName] || '').trim()).filter(Boolean))]
+        : [];
+
+    if (!validityValues.length) {
+        return '';
+    }
+
+    return formatBulkLicenseValidityChip(validityValues[0]);
+};
+
+const resolveBulkLicenseUpdateValiditySummary = (response) => {
+    const directAfterSummary = formatBulkLicenseValidityChip(response?.targetValidUntilAfter);
+    if (directAfterSummary) {
+        return directAfterSummary;
+    }
+
+    const updatedTargetLicenses = Array.isArray(response?.updatedTargetLicenses) ? response.updatedTargetLicenses : [];
+    const updatedAfterSummary = resolveBulkLicenseValidityFromLicenses(updatedTargetLicenses, 'validUntilAfter');
+    if (updatedAfterSummary) {
+        return updatedAfterSummary;
+    }
+
+    const directBeforeSummary = formatBulkLicenseValidityChip(response?.targetValidUntilBefore);
+    if (directBeforeSummary) {
+        return directBeforeSummary;
+    }
+
+    return resolveBulkLicenseValidityFromLicenses(updatedTargetLicenses, 'validUntilBefore');
+};
+
+const stampBulkLicenseItem = (item) => {
+    item.updatedAt = new Date().toISOString();
+};
+
+const buildBulkLicenseQueueStats = (run) => run.items.reduce((stats, item) => {
+    stats.total += 1;
+    if (item.state === 'success') {
+        stats.success += 1;
+    } else if (item.state === 'warning') {
+        stats.warning += 1;
+    } else if (item.state === 'error') {
+        stats.error += 1;
+    } else if (item.state === 'processing') {
+        stats.processing += 1;
+    } else {
+        stats.idle += 1;
+    }
+
+    return stats;
+}, {
+    total: 0,
+    success: 0,
+    warning: 0,
+    error: 0,
+    processing: 0,
+    idle: 0
+});
+
+const buildBulkLicenseQueueContent = (run) => {
+    const fragment = document.createDocumentFragment();
+    const stats = buildBulkLicenseQueueStats(run);
+    const useCompactLayout = window.matchMedia('(max-width: 960px)').matches;
+    const summaryPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
+    summaryPanel.appendChild(
+        createCardLicenseModalNode(
+            'h3',
+            'dao-license-modal__section-title',
+            run.action === BULK_LICENSE_ACTIONS.update ? 'Масове оновлення ліцензій' : 'Масова перевірка ліцензій'
+        )
+    );
+    summaryPanel.appendChild(
+        createCardLicenseModalNode(
+            'p',
+            'dao-license-modal__section-caption',
+            run.processing
+                ? 'Результати з’являються по мірі обробки кожного сервера.'
+                : run.aborted
+                    ? 'Чергу зупинено до завершення всіх серверів.'
+                    : 'Обробку завершено. Підсумок нижче.'
+        )
+    );
+
+    const badgeContainer = createCardLicenseModalNode('div', 'dao-license-modal__badges');
+    badgeContainer.appendChild(createCardLicenseModalBadge('Усього', String(stats.total)));
+    badgeContainer.appendChild(createCardLicenseModalBadge('Готово', String(stats.success)));
+    badgeContainer.appendChild(createCardLicenseModalBadge('Увага', String(stats.warning)));
+    badgeContainer.appendChild(createCardLicenseModalBadge('Помилки', String(stats.error)));
+    if (stats.processing > 0) {
+        badgeContainer.appendChild(createCardLicenseModalBadge('Зараз', String(stats.processing)));
+    }
+    summaryPanel.appendChild(badgeContainer);
+    fragment.appendChild(summaryPanel);
+
+    if (run.globalError) {
+        const note = buildCardLicenseStatusNote('error', run.globalError);
+        if (note) {
+            fragment.appendChild(note);
+        }
+    }
+
+    const listPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
+    listPanel.appendChild(createCardLicenseModalNode('h3', 'dao-license-modal__section-title', 'Сервери'));
+    listPanel.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__section-caption', run.sourceLabel));
+
+    if (!run.items.length) {
+        listPanel.appendChild(createCardLicenseModalNode('div', 'dao-license-modal__empty-state', 'Немає серверів для обробки.'));
+        fragment.appendChild(listPanel);
+        return fragment;
+    }
+
+    const listNode = createCardLicenseModalNode('div', 'dao-license-modal__group-list');
+    listNode.style.display = 'grid';
+    listNode.style.gap = '10px';
+
+    const headerRow = createCardLicenseModalNode('div', 'dao-license-modal__section-caption');
+    headerRow.style.cssText = useCompactLayout
+        ? 'display:none;'
+        : 'display:grid; grid-template-columns:minmax(0,1.9fr) minmax(180px,1fr) minmax(150px,0.9fr); gap:12px; align-items:center; padding:0 4px 6px 4px; color:#64748b; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;';
+
+    if (!useCompactLayout) {
+        ['Сервер', 'Результат', 'Термін'].forEach((label) => {
+            headerRow.appendChild(createCardLicenseModalNode('span', '', label));
+        });
+        listPanel.appendChild(headerRow);
+    }
+
+    run.items.forEach((item, index) => {
+        const resultLabel = formatBulkLicenseResultLabel(item);
+        const normalizedMessage = String(item?.message || '').trim();
+        const normalizedDetails = String(item?.details || '').trim();
+        const shouldRenderMessage = Boolean(normalizedMessage) && normalizedMessage !== resultLabel;
+        const shouldRenderDetails = Boolean(normalizedDetails)
+            && normalizedDetails !== resultLabel
+            && normalizedDetails !== normalizedMessage
+            && normalizedDetails !== 'Операцію завершено без додаткових деталей.';
+        const row = createCardLicenseModalNode('article', 'dao-license-modal__license-item');
+        row.style.cssText = useCompactLayout
+            ? 'display:grid; grid-template-columns:minmax(0,1fr); gap:12px; align-items:start;'
+            : 'display:grid; grid-template-columns:minmax(0,1.9fr) minmax(180px,1fr) minmax(150px,0.9fr); gap:12px; align-items:start;';
+
+        const main = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
+        main.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-name', `${index + 1}. ${item.label}`));
+        if (shouldRenderMessage) {
+            const messageNode = createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', normalizedMessage);
+            messageNode.style.whiteSpace = 'normal';
+            main.appendChild(messageNode);
+        }
+        if (shouldRenderDetails) {
+            const detailsNode = createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', normalizedDetails);
+            detailsNode.style.whiteSpace = 'normal';
+            main.appendChild(detailsNode);
+        }
+
+        const resultCell = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
+        resultCell.appendChild(
+            createCardLicenseModalNode(
+                'span',
+                `dao-license-modal__status-pill dao-license-modal__status-pill--${resolveBulkLicenseQueueItemTone(item)}`,
+                resultLabel
+            )
+        );
+
+        const licenseCell = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
+        licenseCell.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', 'Термін'));
+        const licenseValueNode = createCardLicenseModalNode('p', 'dao-license-modal__license-name', buildBulkLicenseValiditySummary(item));
+        licenseValueNode.style.fontSize = '14px';
+        licenseValueNode.style.marginTop = '6px';
+        licenseCell.appendChild(licenseValueNode);
+
+        row.appendChild(main);
+        if (useCompactLayout) {
+            const compactMeta = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
+            compactMeta.appendChild(resultCell);
+            compactMeta.appendChild(licenseCell);
+            compactMeta.style.display = 'grid';
+            compactMeta.style.gap = '12px';
+            row.appendChild(compactMeta);
+        } else {
+            row.appendChild(resultCell);
+            row.appendChild(licenseCell);
+        }
+        listNode.appendChild(row);
+    });
+
+    listPanel.appendChild(listNode);
+    fragment.appendChild(listPanel);
+    return fragment;
+};
+
+const renderBulkLicenseQueueModal = (run) => {
+    const subtitleParts = [run.sourceLabel, `${run.items.length} серверів`];
+    if (run.batchId) {
+        subtitleParts.push(`Batch ${run.batchId.slice(0, 8)}`);
+    }
+
+    renderCardLicenseModal({
+        title: run.action === BULK_LICENSE_ACTIONS.update ? 'Масове оновлення ліцензій' : 'Масова перевірка ліцензій',
+        subtitle: subtitleParts.join(' • '),
+        content: buildBulkLicenseQueueContent(run),
+        displayMode: CARD_LICENSE_DISPLAY_MODES.list
+    });
+};
+
+const applyBulkLicenseCheckItemResult = (item, response) => {
+    const licenseResult = response?.result && typeof response.result === 'object' ? response.result : {};
+    const serverInfo = licenseResult.server && typeof licenseResult.server === 'object' ? licenseResult.server : {};
+    const licenses = Array.isArray(licenseResult.licenses) ? licenseResult.licenses : [];
+    const tone = resolveCardLicenseStatusTone(serverInfo.licenseStatus);
+
+    item.state = tone === 'success' ? 'success' : tone === 'warning' ? 'warning' : 'error';
+    item.resultCode = normalizeCardLicenseStatus(serverInfo.licenseStatus).toUpperCase();
+    item.outcome = tone;
+    item.updatedTargetCount = licenses.length;
+    item.message = formatCardLicenseBusinessStatus(serverInfo.licenseStatus);
+    item.details = serverInfo.statusMessage || (licenses.length ? `Знайдено ліцензій: ${licenses.length}` : 'Список ліцензій порожній.');
+    item.validitySummary = resolveBulkLicenseValidityFromLicenses(licenses, 'validUntil');
+    item.diffSummaryLabel = '';
+    stampBulkLicenseItem(item);
+};
+
+const resolveBulkLicenseUpdateItemState = (response) => {
+    if (response?.resultCode === 'UPDATED_CONFIRMED' || response?.outcome === 'success') {
+        return 'success';
+    }
+
+    if (response?.outcome === 'warning' || response?.resultCode === 'UPDATED_NOT_CONFIRMED') {
+        return 'warning';
+    }
+
+    if (response?.resultCode === 'MANUAL_SERIAL_REQUIRED') {
+        return 'warning';
+    }
+
+    return 'error';
+};
+
+const buildBulkLicenseUpdateDetails = (response) => {
+    if (response?.statusMessage) {
+        return response.statusMessage;
+    }
+
+    const diffSummaryLabel = buildBulkLicenseDiffSummaryLabel(response?.diffSummary);
+    if (diffSummaryLabel) {
+        return diffSummaryLabel;
+    }
+
+    if (response?.resultCode === 'UPDATED_NOT_CONFIRMED' && resolveBulkLicenseUpdateValiditySummary(response)) {
+        return 'Показано останній підтверджений термін.';
+    }
+
+    return '';
+};
+
+const applyBulkLicenseUpdateItemResult = (item, response) => {
+    const updatedTargetLicenses = Array.isArray(response?.updatedTargetLicenses) ? response.updatedTargetLicenses : [];
+
+    item.state = resolveBulkLicenseUpdateItemState(response);
+    item.resultCode = response?.resultCode || '';
+    item.outcome = response?.outcome || '';
+    item.updatedTargetCount = updatedTargetLicenses.length;
+    item.message = formatBulkLicenseResultLabel({
+        resultCode: response?.resultCode,
+        outcome: response?.outcome,
+        state: item.state,
+    });
+    item.details = buildBulkLicenseUpdateDetails(response);
+    item.validitySummary = resolveBulkLicenseUpdateValiditySummary(response);
+    item.diffSummaryLabel = buildBulkLicenseDiffSummaryLabel(response?.diffSummary);
+    stampBulkLicenseItem(item);
+};
+
+const promptBulkLicenseSerialNumber = (item, response) => {
+    const baseMessage = response?.statusMessage || 'Сервер вимагає ручний UID/serial для оновлення ліцензії.';
+
+    while (true) {
+        const enteredValue = window.prompt(`${baseMessage}\n\n${item.label}\nВведіть UID/serial:`, item.serialNumber || '');
+        if (enteredValue === null) {
+            return null;
+        }
+
+        const normalizedValue = enteredValue.trim();
+        if (normalizedValue) {
+            return normalizedValue;
+        }
+    }
+};
+
+const normalizeBulkLicenseModeFormat = (value) => {
+    return String(value || '').trim().toLowerCase() === BULK_LICENSE_MODE_FORMATS.inline
+        ? BULK_LICENSE_MODE_FORMATS.inline
+        : BULK_LICENSE_MODE_FORMATS.legacy;
+};
+
+const openLegacyBulkLicenseManager = ({ action, targets }) => {
+    const servers = Array.isArray(targets)
+        ? targets.map((context) => formatCardServerContextLabel(context)).filter(Boolean)
+        : [];
+
+    if (!servers.length) {
+        alert('Не знайдено серверів для обробки.');
+        return;
+    }
+
+    window.open(`${LEGACY_LICENSE_MANAGER_BASE}?servers=${encodeURIComponent(servers.join(','))}&action=${encodeURIComponent(action)}`, '_blank');
+};
+
+const shouldStopBulkLicenseQueueAfterError = (error) => {
+    const message = String(error?.message || '').toLowerCase();
+    return message.includes('право на масове оновлення ліцензій')
+        || message.includes('персональний доступ цього пристрою відкликано')
+        || message.includes('завершіть доступ пристрою');
+};
+
+const markBulkLicenseQueueRemainingItems = (run, state, message) => {
+    run.items.forEach((item) => {
+        if (item.state !== 'idle') {
+            return;
+        }
+
+        item.state = state;
+        item.message = message;
+        item.details = 'Чергу завершено раніше, ніж дійшла черга до цього сервера.';
+    });
+};
+
+const performBulkLicenseQueueItem = async (run, item) => {
+    if (run.action === BULK_LICENSE_ACTIONS.check) {
+        const response = await requestCardLicenseCheck(item.context);
+        applyBulkLicenseCheckItemResult(item, response);
+        return;
+    }
+
+    while (!run.aborted) {
+        const response = await requestCardLicenseUpdate(item.context, {
+            batchId: run.batchId,
+            serialNumber: item.serialNumber || null
+        });
+
+        applyBulkLicenseUpdateItemResult(item, response);
+        if (response?.resultCode !== 'MANUAL_SERIAL_REQUIRED') {
+            return;
+        }
+
+        const manualSerialNumber = promptBulkLicenseSerialNumber(item, response);
+        if (!manualSerialNumber) {
+            item.state = 'error';
+            item.resultCode = 'MANUAL_SERIAL_CANCELLED';
+            item.outcome = 'error';
+            item.message = 'Ручний UID не введено.';
+            item.details = 'Оновлення для цього сервера скасовано користувачем.';
+            item.diffSummaryLabel = '';
+            stampBulkLicenseItem(item);
+            return;
+        }
+
+        item.serialNumber = manualSerialNumber;
+        item.state = 'processing';
+        item.message = 'Повторюємо оновлення з ручним UID...';
+        item.details = `UID: ${manualSerialNumber}`;
+        item.diffSummaryLabel = '';
+        stampBulkLicenseItem(item);
+        if (!run.aborted) {
+            renderBulkLicenseQueueModal(run);
+        }
+    }
+};
+
+const runBulkLicenseQueue = async (run) => {
+    run.processing = true;
+    renderBulkLicenseQueueModal(run);
+
+    try {
+        for (const item of run.items) {
+            if (run.aborted) {
+                break;
+            }
+
+            item.state = 'processing';
+            item.message = run.action === BULK_LICENSE_ACTIONS.update ? 'Запускаємо оновлення...' : 'Запускаємо перевірку...';
+            item.details = '';
+            item.diffSummaryLabel = '';
+            item.validitySummary = '';
+            stampBulkLicenseItem(item);
+            renderBulkLicenseQueueModal(run);
+
+            try {
+                await performBulkLicenseQueueItem(run, item);
+            } catch (error) {
+                item.state = 'error';
+                item.outcome = 'error';
+                item.message = error?.message || 'Невідома помилка під час обробки сервера.';
+                item.details = '';
+                item.diffSummaryLabel = '';
+                item.validitySummary = '';
+                stampBulkLicenseItem(item);
+
+                if (shouldStopBulkLicenseQueueAfterError(error)) {
+                    run.globalError = item.message;
+                    run.aborted = true;
+                    markBulkLicenseQueueRemainingItems(run, 'error', item.message);
+                    break;
+                }
+            }
+
+            if (!run.aborted) {
+                renderBulkLicenseQueueModal(run);
+            }
+        }
+    } finally {
+        run.processing = false;
+        run.completedAt = new Date().toISOString();
+
+        if (run.aborted) {
+            activeBulkLicenseRun = null;
+            return;
+        }
+
+        if (activeBulkLicenseRun === run) {
+            renderBulkLicenseQueueModal(run);
+        }
+    }
+};
+
+const startBulkLicenseQueue = ({ action, sourceLabel, targets, bulkModeFormat = BULK_LICENSE_MODE_FORMATS.legacy }) => {
+    const dedupedTargets = Array.isArray(targets)
+        ? targets.reduce((result, context) => {
+            const label = formatCardServerContextLabel(context);
+            if (!label || result.seen.has(label)) {
+                return result;
+            }
+
+            result.seen.add(label);
+            result.items.push(context);
+            return result;
+        }, { seen: new Set(), items: [] }).items
+        : [];
+
+    if (!dedupedTargets.length) {
+        alert('Не знайдено серверів для обробки.');
+        return;
+    }
+
+    if (normalizeBulkLicenseModeFormat(bulkModeFormat) === BULK_LICENSE_MODE_FORMATS.legacy) {
+        openLegacyBulkLicenseManager({
+            action,
+            targets: dedupedTargets
+        });
+        return;
+    }
+
+    if (activeBulkLicenseRun?.processing) {
+        renderBulkLicenseQueueModal(activeBulkLicenseRun);
+        alert('Масова операція вже виконується. Дочекайтеся завершення поточної черги.');
+        return;
+    }
+
+    const run = {
+        id: createBulkLicenseBatchId(),
+        action,
+        batchId: action === BULK_LICENSE_ACTIONS.update ? createBulkLicenseBatchId() : null,
+        sourceLabel,
+        processing: false,
+        aborted: false,
+        globalError: '',
+        items: dedupedTargets.map((context, index) => ({
+            id: `${index + 1}-${formatCardServerContextLabel(context)}`,
+            context,
+            label: formatCardServerContextLabel(context),
+            state: 'idle',
+            message: '',
+            details: '',
+            resultCode: '',
+            outcome: '',
+            serialNumber: '',
+            updatedTargetCount: 0,
+            updatedAt: '',
+            validitySummary: '',
+            diffSummaryLabel: ''
+        }))
+    };
+
+    activeBulkLicenseRun = run;
+    renderBulkLicenseQueueModal(run);
+    void runBulkLicenseQueue(run);
+};
+
 const handleCardLicenseCheck = async (button, serverContext) => {
     const requestToken = ++cardLicenseCheckRequestToken;
     activeCardLicenseCheckButton = button;
@@ -3837,6 +4536,611 @@ const pollCardServerError = async (context, options = {}) => {
     } catch (error) {
         console.error(error.message);
     }
+})();
+
+// --- Масові дії на сторінці-списку довідника ---
+(() => {
+    const HEADER_CLIENT = 'Клієнт';
+    const HEADER_SERVER = 'Сервер';
+    const HEADER_PORT = 'Порт';
+    const HEADER_CHAIN = 'Chain';
+    const HOVER_PANEL_ID = 'bulk-hover-panel';
+    const HOVER_HIDE_DELAY = 1000;
+    const COLUMN_IDS = {
+        [HEADER_CLIENT]: '80',
+        [HEADER_SERVER]: '72',
+        [HEADER_PORT]: '74',
+        [HEADER_CHAIN]: '260'
+    };
+    const DEFAULT_COL_CLASSES = {
+        [HEADER_CLIENT]: 'td-item-qe-4',
+        [HEADER_SERVER]: 'td-item-qe-8',
+        [HEADER_PORT]: 'td-item-qe-18',
+        [HEADER_CHAIN]: 'td-item-qe-10'
+    };
+    const HEADER_CANDIDATE_SELECTOR = [
+        '.td-head-common-sort',
+        '.td-head',
+        'thead th',
+        'thead td',
+        'th[data-columnid]',
+        'th[data-column-id]',
+        'td[data-columnid]',
+        'td[data-column-id]',
+        '[role="columnheader"]'
+    ].join(', ');
+    const COLS = [
+        { headerText: HEADER_CHAIN, label: 'Chain' },
+        { headerText: HEADER_CLIENT, label: 'Клієнт' }
+    ];
+
+    let hideTimer = null;
+    let hideAnimationTimer = null;
+    let activeHoverCell = null;
+    let bulkAccessState = null;
+    let bulkAccessStateRouteKey = '';
+    let bulkAccessStateRequestPromise = null;
+
+    const buildBulkAccessRouteKey = () => `${window.location.pathname}|${window.location.search}|${window.location.hash}`;
+
+    const hasHandbookBulkTargets = () => Boolean(
+        document.querySelector('tr.handbook-data-item')
+        || findColumnHeaderByText(HEADER_SERVER)
+        || findColumnHeaderByColumnId(COLUMN_IDS[HEADER_SERVER])
+    );
+
+    const canUseBulkLicenseActions = () => Boolean(
+        bulkAccessState?.hasExtensionKey && bulkAccessState?.hasBulkLicenseAccess
+    );
+
+    const requestBulkAccessState = () => new Promise((resolve) => {
+        chrome.runtime.sendMessage({
+            action: 'GET_EXTENSION_ACCESS_STATE'
+        }, (response) => {
+            if (chrome.runtime.lastError || !response?.ok || !response.state) {
+                resolve(bulkAccessState || {
+                    hasExtensionKey: false,
+                    hasBulkLicenseAccess: false,
+                    bulkModeFormat: BULK_LICENSE_MODE_FORMATS.legacy,
+                    scopes: []
+                });
+                return;
+            }
+
+            resolve(response.state);
+        });
+    });
+
+    const syncBulkAccessState = (forceRefresh = false) => {
+        if (!hasHandbookBulkTargets()) {
+            return Promise.resolve(bulkAccessState);
+        }
+
+        const routeKey = buildBulkAccessRouteKey();
+        if (!forceRefresh && bulkAccessState && bulkAccessStateRouteKey === routeKey) {
+            return Promise.resolve(bulkAccessState);
+        }
+
+        if (bulkAccessStateRequestPromise) {
+            return bulkAccessStateRequestPromise;
+        }
+
+        bulkAccessStateRequestPromise = requestBulkAccessState()
+            .then((state) => {
+                bulkAccessState = state || {
+                    hasExtensionKey: false,
+                    hasBulkLicenseAccess: false,
+                    bulkModeFormat: BULK_LICENSE_MODE_FORMATS.legacy,
+                    scopes: []
+                };
+                bulkAccessStateRouteKey = routeKey;
+
+                if (!canUseBulkLicenseActions()) {
+                    hidePanel(0);
+                }
+
+                return bulkAccessState;
+            })
+            .finally(() => {
+                bulkAccessStateRequestPromise = null;
+            });
+
+        return bulkAccessStateRequestPromise;
+    };
+
+    const normalizeComparableText = (value) => (
+        String(value || '')
+            .toLowerCase()
+            .replace(/[^a-zа-яіїєґ0-9]+/giu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+    );
+
+    const findQeClassSuffix = (element) => {
+        if (!element) {
+            return null;
+        }
+
+        const matchedClass = [...element.classList].find((className) => /(?:^|-)qe-\d+$/.test(className));
+        if (!matchedClass) {
+            return null;
+        }
+
+        const match = matchedClass.match(/qe-(\d+)$/);
+        return match ? match[1] : null;
+    };
+
+    const getColumnIdFromElement = (element) => {
+        if (!element) {
+            return '';
+        }
+
+        const directValue = element.getAttribute?.('data-columnid') || element.getAttribute?.('data-column-id');
+        if (directValue) {
+            return directValue.trim();
+        }
+
+        const container = element.closest?.('td, th, .td-head');
+        const containerValue = container?.getAttribute?.('data-columnid') || container?.getAttribute?.('data-column-id');
+        if (containerValue) {
+            return containerValue.trim();
+        }
+
+        const nestedValue = element.querySelector?.('[data-columnid], [data-column-id]');
+        return nestedValue?.getAttribute('data-columnid') || nestedValue?.getAttribute('data-column-id') || '';
+    };
+
+    const findColumnHeaderByText = (headerText) => {
+        const normalizedHeader = normalizeComparableText(headerText);
+        if (!normalizedHeader) {
+            return null;
+        }
+
+        const candidates = [...document.querySelectorAll(HEADER_CANDIDATE_SELECTOR)].filter((element) => (
+            element.closest('.tbl-list, .tbl-list-scroll__container, .td-head')
+        ));
+        const exactMatch = candidates.find((candidate) => normalizeComparableText(candidate.textContent) === normalizedHeader);
+        return exactMatch?.closest('td, th, .td-head') || exactMatch || null;
+    };
+
+    const findColumnHeaderByColumnId = (columnId) => {
+        if (!columnId) {
+            return null;
+        }
+
+        const headerTrigger = document.querySelector(`.td-head-common-sort[data-columnid="${columnId}"]`)
+            || document.querySelector(`.td-head-common-sort[data-column-id="${columnId}"]`)
+            || document.querySelector(`[data-columnid="${columnId}"]`)
+            || document.querySelector(`[data-column-id="${columnId}"]`);
+
+        return headerTrigger?.closest('td, th, .td-head') || headerTrigger || null;
+    };
+
+    const findColumnClassFromTable = (table, columnIndex) => {
+        if (!table || columnIndex < 0) {
+            return null;
+        }
+
+        const firstDataRow = [...table.querySelectorAll('tbody tr.handbook-data-item')]
+            .find((row) => row.children && row.children.length > columnIndex);
+        if (!firstDataRow) {
+            return null;
+        }
+
+        const cell = firstDataRow.children[columnIndex];
+        if (!cell) {
+            return null;
+        }
+
+        return [...cell.classList].find((className) => /^td-item-qe-\d+$/.test(className)) || null;
+    };
+
+    const findColumnClassById = (columnId) => {
+        if (!columnId) {
+            return null;
+        }
+
+        const columnElement = document.querySelector(`col[data-column-id="${columnId}"]`)
+            || document.querySelector(`col[data-columnid="${columnId}"]`);
+        if (columnElement?.parentElement) {
+            const columnIndex = [...columnElement.parentElement.children].indexOf(columnElement);
+            const tableClass = findColumnClassFromTable(columnElement.closest('table'), columnIndex);
+            if (tableClass) {
+                return tableClass;
+            }
+        }
+
+        const headerElement = findColumnHeaderByColumnId(columnId)
+            || document.querySelector(`[data-columnid="${columnId}"]`)
+            || document.querySelector(`[data-column-id="${columnId}"]`);
+        const qeSuffix = findQeClassSuffix(headerElement)
+            || findQeClassSuffix(headerElement?.querySelector?.('.td-head-common-sort'));
+
+        return qeSuffix ? `td-item-qe-${qeSuffix}` : null;
+    };
+
+    const findColClass = (headerText) => {
+        const headerElement = findColumnHeaderByText(headerText);
+        const qeSuffix = findQeClassSuffix(headerElement)
+            || findQeClassSuffix(headerElement?.querySelector?.('.td-head-common-sort'));
+        if (qeSuffix) {
+            return `td-item-qe-${qeSuffix}`;
+        }
+
+        const headerColumnId = getColumnIdFromElement(headerElement);
+        const classFromTextMatch = findColumnClassById(headerColumnId);
+        if (classFromTextMatch) {
+            return classFromTextMatch;
+        }
+
+        const fallbackClass = findColumnClassById(COLUMN_IDS[headerText]);
+        if (fallbackClass) {
+            return fallbackClass;
+        }
+
+        return DEFAULT_COL_CLASSES[headerText] || null;
+    };
+
+    const cellText = (row, colClass) => {
+        if (!colClass) {
+            return '';
+        }
+
+        const cell = row.querySelector(`td.${colClass}`);
+        if (!cell) {
+            return '';
+        }
+
+        const link = cell.querySelector('a');
+        return (link ? link.textContent : cell.textContent).trim();
+    };
+
+    const resolveBulkServerContextFromRawInput = (rawServer, rawPort) => {
+        const rawValue = String(rawServer || '').trim();
+        if (!rawValue) {
+            return null;
+        }
+
+        const fallbackServer = rawValue.split('/').map((part) => part.trim()).find(Boolean) || rawValue;
+        const extractedServer = extractDaoCloudAddress(rawValue) || fallbackServer;
+        return resolveCardServerContext(extractedServer, rawPort);
+    };
+
+    const collectServers = (colClass, groupValue) => {
+        const rows = document.querySelectorAll('tr.handbook-data-item');
+        const seen = new Set();
+        const result = [];
+        const serverClass = findColClass(HEADER_SERVER);
+        const portClass = findColClass(HEADER_PORT);
+
+        rows.forEach((row) => {
+            if (cellText(row, colClass) !== groupValue) {
+                return;
+            }
+
+            const context = resolveBulkServerContextFromRawInput(
+                cellText(row, serverClass),
+                cellText(row, portClass)
+            );
+            const label = formatCardServerContextLabel(context);
+            if (!label || seen.has(label)) {
+                return;
+            }
+
+            seen.add(label);
+            result.push(context);
+        });
+
+        return result;
+    };
+
+    const collectAllServersOnPage = () => {
+        const rows = document.querySelectorAll('tr.handbook-data-item');
+        const seen = new Set();
+        const result = [];
+        const serverClass = findColClass(HEADER_SERVER);
+        const portClass = findColClass(HEADER_PORT);
+
+        rows.forEach((row) => {
+            const context = resolveBulkServerContextFromRawInput(
+                cellText(row, serverClass),
+                cellText(row, portClass)
+            );
+            const label = formatCardServerContextLabel(context);
+            if (!label || seen.has(label)) {
+                return;
+            }
+
+            seen.add(label);
+            result.push(context);
+        });
+
+        return result;
+    };
+
+    const ensureHoverPanel = () => {
+        let panel = document.getElementById(HOVER_PANEL_ID);
+        if (panel) {
+            return panel;
+        }
+
+        panel = document.createElement('div');
+        panel.id = HOVER_PANEL_ID;
+        panel.style.cssText = `
+            position: fixed;
+            z-index: 99999;
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+            padding: 10px 14px;
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 220px;
+            pointer-events: auto;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            font-family: inherit;
+            font-size: 12px;
+        `;
+        panel.addEventListener('mouseenter', () => {
+            clearTimeout(hideTimer);
+            hideTimer = null;
+        });
+        panel.addEventListener('mouseleave', () => hidePanel(150));
+        document.body.appendChild(panel);
+        return panel;
+    };
+
+    const positionBelow = (anchorElement, panel) => {
+        const rect = anchorElement.getBoundingClientRect();
+        const panelWidth = panel.offsetWidth || 260;
+        let top = rect.bottom + 4;
+        let left = rect.left;
+
+        if (left + panelWidth > window.innerWidth - 8) {
+            left = window.innerWidth - panelWidth - 8;
+        }
+
+        left = Math.max(8, left);
+        panel.style.top = `${top}px`;
+        panel.style.left = `${left}px`;
+        panel.style.right = 'auto';
+    };
+
+    const showPanel = (anchorElement, renderRow) => {
+        const panel = ensureHoverPanel();
+
+        if (activeHoverCell && activeHoverCell !== anchorElement && panel.style.display !== 'none') {
+            return;
+        }
+
+        clearTimeout(hideTimer);
+        hideTimer = null;
+        clearTimeout(hideAnimationTimer);
+        hideAnimationTimer = null;
+        activeHoverCell = anchorElement;
+
+        panel.innerHTML = '';
+        const row = renderRow();
+        if (!row) {
+            activeHoverCell = null;
+            return;
+        }
+
+        panel.appendChild(row);
+        panel.style.display = 'flex';
+        requestAnimationFrame(() => {
+            positionBelow(anchorElement, panel);
+            panel.style.opacity = '1';
+        });
+    };
+
+    function hidePanel(delay = 200) {
+        const panel = document.getElementById(HOVER_PANEL_ID);
+        if (!panel) {
+            return;
+        }
+
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+            hideTimer = null;
+            panel.style.opacity = '0';
+            clearTimeout(hideAnimationTimer);
+            hideAnimationTimer = setTimeout(() => {
+                panel.style.display = 'none';
+                panel.innerHTML = '';
+                activeHoverCell = null;
+                hideAnimationTimer = null;
+            }, 150);
+        }, delay);
+    }
+
+    const makeBtn = (label, background, onClick) => {
+        const button = document.createElement('button');
+        button.textContent = label;
+        button.style.cssText = `
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 5px;
+            border: none;
+            font-weight: 600;
+            font-size: 11px;
+            background: ${background};
+            color: #fff;
+            transition: opacity 0.15s ease;
+            white-space: nowrap;
+            flex-shrink: 0;
+        `;
+        button.addEventListener('mouseenter', () => {
+            button.style.opacity = '0.75';
+        });
+        button.addEventListener('mouseleave', () => {
+            button.style.opacity = '1';
+        });
+        button.addEventListener('click', onClick);
+        return button;
+    };
+
+    const makeActionRow = (label, value, onRunAction) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+
+        const labelNode = document.createElement('span');
+        labelNode.textContent = `${label}:`;
+        labelNode.style.cssText = 'color: #6b7280; font-weight: 500; flex-shrink: 0; min-width: 46px; font-size: 11px;';
+
+        const valueNode = document.createElement('span');
+        valueNode.textContent = value;
+        valueNode.style.cssText = 'font-weight: 600; color: #111827; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+
+        row.appendChild(labelNode);
+        row.appendChild(valueNode);
+        row.appendChild(makeBtn('✓ Перевірити', '#059669', () => onRunAction(BULK_LICENSE_ACTIONS.check)));
+        row.appendChild(makeBtn('↻ Оновити', '#d97706', () => onRunAction(BULK_LICENSE_ACTIONS.update)));
+        return row;
+    };
+
+    const runHandbookBulkAction = async ({ action, sourceLabel, targets }) => {
+        const nextState = await syncBulkAccessState(true);
+        if (!(nextState?.hasExtensionKey && nextState?.hasBulkLicenseAccess)) {
+            hidePanel(0);
+            return;
+        }
+
+        startBulkLicenseQueue({
+            action,
+            sourceLabel,
+            targets,
+            bulkModeFormat: nextState.bulkModeFormat
+        });
+        hidePanel(0);
+    };
+
+    const makeGroupRow = (label, value, colClass) => {
+        if (!canUseBulkLicenseActions()) {
+            return null;
+        }
+
+        if (!value) {
+            return null;
+        }
+
+        return makeActionRow(label, value, (action) => {
+            const servers = collectServers(colClass, value);
+            if (!servers.length) {
+                alert(`Не знайдено серверів для: ${value}`);
+                return;
+            }
+
+            void runHandbookBulkAction({
+                action,
+                sourceLabel: `${label}: ${value}`,
+                targets: servers
+            });
+        });
+    };
+
+    const makeAllServersRow = () => {
+        if (!canUseBulkLicenseActions()) {
+            return null;
+        }
+
+        return makeActionRow('Сервери', 'Усі на сторінці', (action) => {
+        const servers = collectAllServersOnPage();
+        if (!servers.length) {
+            alert('Не знайдено серверів на поточній сторінці.');
+            return;
+        }
+
+        void runHandbookBulkAction({
+            action,
+            sourceLabel: 'Сервери: усі на сторінці',
+            targets: servers
+        });
+        });
+    };
+
+    const attachCellHover = () => {
+        const resolvedColumns = COLS
+            .map(({ headerText, label }) => ({ headerText, label, colClass: findColClass(headerText) }))
+            .filter(({ colClass }) => Boolean(colClass));
+
+        document.querySelectorAll('tr.handbook-data-item').forEach((row) => {
+            resolvedColumns.forEach(({ label, colClass }) => {
+                const cell = row.querySelector(`td.${colClass}`);
+                if (!cell || cell.dataset.bulkHoverAttached) {
+                    return;
+                }
+
+                cell.dataset.bulkHoverAttached = '1';
+                cell.style.cursor = 'default';
+                cell.addEventListener('mouseenter', () => {
+                    const value = cellText(row, colClass);
+                    showPanel(cell, () => makeGroupRow(label, value, colClass));
+                });
+                cell.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
+            });
+        });
+    };
+
+    const attachServerHeaderHover = () => {
+        const hoverTarget = findColumnHeaderByText(HEADER_SERVER) || findColumnHeaderByColumnId(COLUMN_IDS[HEADER_SERVER]);
+        if (!hoverTarget || hoverTarget.dataset.bulkServerHoverAttached) {
+            return;
+        }
+
+        hoverTarget.dataset.bulkServerHoverAttached = '1';
+        hoverTarget.style.cursor = 'default';
+        hoverTarget.addEventListener('mouseenter', () => {
+            showPanel(hoverTarget, () => makeAllServersRow());
+        });
+        hoverTarget.addEventListener('mouseleave', () => hidePanel(HOVER_HIDE_DELAY));
+    };
+
+    const attachHoverTargets = () => {
+        if (!hasHandbookBulkTargets()) {
+            return;
+        }
+
+        const routeKey = buildBulkAccessRouteKey();
+        if (!bulkAccessState || bulkAccessStateRouteKey !== routeKey) {
+            void syncBulkAccessState(true).then(() => {
+                if (canUseBulkLicenseActions()) {
+                    attachHoverTargets();
+                }
+            });
+            return;
+        }
+
+        if (!canUseBulkLicenseActions()) {
+            hidePanel(0);
+            return;
+        }
+
+        attachCellHover();
+        attachServerHeaderHover();
+    };
+
+    if (!document.body) {
+        return;
+    }
+
+    const observer = new MutationObserver(attachHoverTargets);
+    observer.observe(document.body, { childList: true, subtree: true });
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            bulkAccessState = null;
+            bulkAccessStateRouteKey = '';
+            void syncBulkAccessState(true).then(() => {
+                if (canUseBulkLicenseActions()) {
+                    attachHoverTargets();
+                }
+            });
+        }
+    });
+    attachHoverTargets();
 })();
 
 // --- Логіка для сторінки з панеллю полів (f-id="72") ---

@@ -1354,7 +1354,7 @@ const applyCardVersionCheckResult = (scopeRoot = document, result = lastCardVers
 
     statusNode.title = result.isMatch
         ? `Версія збігається: ${result.healthVersion}`
-        : `У картці ${result.cardVersion || '—'}, на health.jsp ${result.displayVersion || result.healthVersion}`;
+        : `У картці ${result.cardVersion || '—'}, на health.jsp ${result.displayVersion || result.healthVersion}, рекомендуємо оновити картку до актуальної версії.`;
 };
 
 const hasPersistentManualCardError = () => {

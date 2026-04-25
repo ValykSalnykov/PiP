@@ -403,6 +403,8 @@ const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const WEB_BUTTON_ID = 'open-server-web-url-button';
+const WEB_BUTTON_GROUP_ID = 'open-server-web-url-group';
+const API_BUTTON_ID = 'open-server-api-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
@@ -421,6 +423,8 @@ const CARD_LOGIN_BUTTON_LABELS = [
     'Довге очікування'
 ];
 const PLANFIX_DARK_THEME_CLASS = 'dark-theme';
+const CARD_API_PATH = '/integration-management/index.html#/integrations';
+const CARD_API_SUPPORTED_HOST_SUFFIX = '.syrve.app';
 const CARD_BUTTON_INTENTS = {
     default: 'default',
     login: 'login',
@@ -429,6 +433,7 @@ const CARD_BUTTON_INTENTS = {
     devices: 'devices',
     loyalty: 'loyalty',
     web: 'web',
+    api: 'api',
     period: 'period',
     helpdesk: 'helpdesk'
 };
@@ -473,6 +478,12 @@ const CARD_BUTTON_THEME_TOKENS = {
             },
             web: {
                 background: '#0f766e',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            api: {
+                background: '#0369a1',
                 color: '#fff',
                 border: '1px solid transparent',
                 boxShadow: 'none'
@@ -533,6 +544,12 @@ const CARD_BUTTON_THEME_TOKENS = {
                 background: 'rgba(17, 94, 89, 0.8)',
                 color: '#ecfeff',
                 border: '1px solid rgba(45, 212, 191, 0.14)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
+            api: {
+                background: 'rgba(12, 74, 110, 0.8)',
+                color: '#e0f2fe',
+                border: '1px solid rgba(56, 189, 248, 0.14)',
                 boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
             },
             period: {
@@ -668,6 +685,82 @@ const getCardServerAvailabilityUrl = (context) => {
     }
 
     return buildCardServerUrl(context, '/resto/');
+};
+
+const isCardApiAutologinSupportedHost = (server) => {
+    const normalizedServer = normalizeServerHost(server);
+    return normalizedServer === 'syrve.app' || normalizedServer.endsWith(CARD_API_SUPPORTED_HOST_SUFFIX);
+};
+
+const selectPreferredCardApiAddress = (rawAddress) => {
+    const candidates = splitCardServerAddressCandidates(rawAddress)
+        .map((part) => {
+            const endpoint = parseCardServerEndpoint(part);
+            if (!endpoint?.server) {
+                return null;
+            }
+
+            return {
+                raw: part,
+                server: endpoint.server,
+                port: endpoint.port,
+                hostType: classifyCardServerHost(endpoint.server)
+            };
+        })
+        .filter(Boolean);
+
+    const syrveCandidate = candidates.find((candidate) => isCardApiAutologinSupportedHost(candidate.server));
+    if (syrveCandidate) {
+        return syrveCandidate;
+    }
+
+    if (candidates.some((candidate) => candidate.hostType === 'private-ipv4')) {
+        return { errorCode: 'private-only' };
+    }
+
+    return { errorCode: 'not-found' };
+};
+
+const resolveCardApiServerContextFromRawInput = (rawServer, port) => {
+    const selection = selectPreferredCardApiAddress(rawServer);
+    if (!selection?.server) {
+        return {
+            context: null,
+            errorMessage: 'Автовхід API доступний лише для серверів *.syrve.app.'
+        };
+    }
+
+    const context = resolveCardServerContext(selection, port);
+    if (!context?.server) {
+        return {
+            context: null,
+            errorMessage: 'Адресу сервера не знайдено. Перевірте поле адреси.'
+        };
+    }
+
+    if (requiresCardExplicitPort(context.server) && !context.port) {
+        return {
+            context: null,
+            errorMessage: buildCardPortRequiredErrorMessage(context.server)
+        };
+    }
+
+    return {
+        context,
+        selection
+    };
+};
+
+const buildCardApiUrl = (context) => {
+    if (!context?.server) {
+        throw new Error('Адресу сервера не знайдено. Перевірте картку ресторану.');
+    }
+
+    if (!isCardApiAutologinSupportedHost(context.server)) {
+        throw new Error('Автовхід API доступний лише для серверів *.syrve.app.');
+    }
+
+    return buildCardServerUrl(context, CARD_API_PATH);
 };
 
 const getCardServerAvailabilityCacheKey = (context) => getCardServerAvailabilityUrl(context);
@@ -3112,12 +3205,24 @@ const pollCardServerError = async (context, options = {}) => {
         return payload;
     };
 
-    const getServerData = (scopeRoot = document, showAlert = true) => {
+    const getCardServerResolution = (scopeRoot = document) => {
         const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
         const rawServer = serverField ? serverField.textContent.trim() : '';
         const portField = scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
         const port = portField ? portField.textContent.trim() : '';
-        const serverResolution = resolveCardServerContextFromRawInput(rawServer, port);
+        return resolveCardServerContextFromRawInput(rawServer, port);
+    };
+
+    const getCardApiServerResolution = (scopeRoot = document) => {
+        const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
+        const rawServer = serverField ? serverField.textContent.trim() : '';
+        const portField = scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
+        const port = portField ? portField.textContent.trim() : '';
+        return resolveCardApiServerContextFromRawInput(rawServer, port);
+    };
+
+    const getServerData = (scopeRoot = document, showAlert = true) => {
+        const serverResolution = getCardServerResolution(scopeRoot);
 
         if (!serverResolution.context) {
             if (showAlert) {
@@ -3241,6 +3346,39 @@ const pollCardServerError = async (context, options = {}) => {
             resolve(response.tabId);
         });
     });
+
+    const setCardWebActionGroupExpanded = (group, expanded) => {
+        if (!(group instanceof HTMLElement)) {
+            return;
+        }
+
+        const apiButton = group.querySelector(`#${API_BUTTON_ID}`);
+        if (!(apiButton instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        const shouldExpand = Boolean(expanded);
+        group.dataset.expanded = shouldExpand ? 'true' : 'false';
+        group.style.zIndex = shouldExpand ? '14' : '0';
+        apiButton.style.opacity = shouldExpand ? '1' : '0';
+        apiButton.style.transform = shouldExpand
+            ? 'translate(6px, -50%) scale(1)'
+            : 'translate(-14px, -50%) scale(0.96)';
+        apiButton.style.pointerEvents = shouldExpand ? 'auto' : 'none';
+    };
+
+    const syncCardWebActionGroupExpandedState = (group) => {
+        if (!(group instanceof HTMLElement)) {
+            return;
+        }
+
+        const apiButton = group.querySelector(`#${API_BUTTON_ID}`);
+        const shouldExpand = group.matches(':hover')
+            || group.contains(document.activeElement)
+            || (apiButton instanceof HTMLButtonElement && apiButton.disabled);
+
+        setCardWebActionGroupExpanded(group, shouldExpand);
+    };
 
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
@@ -3388,8 +3526,21 @@ const pollCardServerError = async (context, options = {}) => {
     };
 
     const createWebBtn = (scopeRoot) => {
+        const group = document.createElement('div');
+        group.id = WEB_BUTTON_GROUP_ID;
+        group.dataset.cardWebActionGroup = 'true';
+        group.style.cssText = `
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            flex: 0 0 auto;
+            overflow: visible;
+            min-height: 28px;
+        `;
+
         const btn = document.createElement('button');
         btn.id = WEB_BUTTON_ID;
+        btn.type = 'button';
         btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.web;
         btn.textContent = 'Веб';
         btn.style.cssText = `
@@ -3404,7 +3555,37 @@ const pollCardServerError = async (context, options = {}) => {
             color: #fff;
             transition: opacity 0.2s ease;
             white-space: nowrap;
+            position: relative;
+            z-index: 1;
         `;
+
+        const apiBtn = document.createElement('button');
+        apiBtn.id = API_BUTTON_ID;
+        apiBtn.type = 'button';
+        apiBtn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.api;
+        apiBtn.textContent = 'API';
+        apiBtn.style.cssText = `
+            margin-left: 0;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #0369a1;
+            color: #fff;
+            white-space: nowrap;
+            position: absolute;
+            top: 50%;
+            left: calc(100% - 12px);
+            opacity: 0;
+            transform: translate(-14px, -50%) scale(0.96);
+            transform-origin: left center;
+            pointer-events: none;
+            z-index: 0;
+            transition: opacity 0.2s ease, transform 0.22s ease, background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
+        `;
+
         btn.addEventListener('mouseenter', () => {
             if (!btn.disabled) {
                 btn.style.opacity = '0.82';
@@ -3443,7 +3624,69 @@ const pollCardServerError = async (context, options = {}) => {
                 setCardActionButtonLoading(btn, false);
             }
         });
-        return btn;
+
+        apiBtn.addEventListener('mouseenter', () => {
+            if (!apiBtn.disabled) {
+                apiBtn.style.opacity = '1';
+            }
+        });
+        apiBtn.addEventListener('click', async () => {
+            const currentScopeRoot = getCardScopeRoot(apiBtn) || scopeRoot;
+            let apiUrl;
+
+            try {
+                const serverResolution = getCardApiServerResolution(currentScopeRoot);
+                if (!serverResolution.context) {
+                    throw new Error(serverResolution.errorMessage || 'Адресу сервера не знайдено. Перевірте картку ресторану.');
+                }
+
+                apiUrl = buildCardApiUrl(serverResolution.context);
+            } catch (error) {
+                invalidateCardErrorPolling();
+                clearCardErrorMessage();
+                setCardErrorMessage(error?.message || 'Не вдалося підготувати API-адресу.');
+                return;
+            }
+
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
+            setCardWebActionGroupExpanded(group, true);
+            setCardActionButtonLoading(apiBtn, true, 'Відкриваю...');
+
+            try {
+                await openCardWebUrlWithCredentials({
+                    url: apiUrl
+                });
+            } catch (error) {
+                console.error('Не вдалося відкрити API-адресу сервера:', error);
+                setCardErrorMessage(error?.message || 'Не вдалося відкрити API-адресу сервера.');
+            } finally {
+                setCardActionButtonLoading(apiBtn, false);
+                window.requestAnimationFrame(() => {
+                    syncCardWebActionGroupExpandedState(group);
+                });
+            }
+        });
+
+        group.addEventListener('pointerenter', () => {
+            setCardWebActionGroupExpanded(group, true);
+        });
+        group.addEventListener('pointerleave', () => {
+            syncCardWebActionGroupExpandedState(group);
+        });
+        group.addEventListener('focusin', () => {
+            setCardWebActionGroupExpanded(group, true);
+        });
+        group.addEventListener('focusout', () => {
+            window.requestAnimationFrame(() => {
+                syncCardWebActionGroupExpandedState(group);
+            });
+        });
+
+        group.appendChild(btn);
+        group.appendChild(apiBtn);
+        syncCardWebActionGroupExpandedState(group);
+        return group;
     };
 
     const createPeriodBtn = (scopeRoot) => {
@@ -3614,17 +3857,17 @@ const pollCardServerError = async (context, options = {}) => {
             periodButton.after(existingLoyaltyButton);
         }
 
-        const existingWebButton = container.querySelector(`#${WEB_BUTTON_ID}`);
+        const existingWebButtonGroup = container.querySelector(`#${WEB_BUTTON_GROUP_ID}`);
         const loyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
-        if (!existingWebButton) {
-            const webButton = createWebBtn(scopeRoot);
+        if (!existingWebButtonGroup) {
+            const webButtonGroup = createWebBtn(scopeRoot);
             if (loyaltyButton) {
-                loyaltyButton.after(webButton);
+                loyaltyButton.after(webButtonGroup);
             } else {
-                container.appendChild(webButton);
+                container.appendChild(webButtonGroup);
             }
-        } else if (loyaltyButton && loyaltyButton.nextElementSibling !== existingWebButton) {
-            loyaltyButton.after(existingWebButton);
+        } else if (loyaltyButton && loyaltyButton.nextElementSibling !== existingWebButtonGroup) {
+            loyaltyButton.after(existingWebButtonGroup);
         }
 
         const existingHelpDeskButton = container.querySelector(`#${HELPDESK_DRAFT_BUTTON_ID}`);

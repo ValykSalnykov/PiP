@@ -433,10 +433,13 @@ const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_LICENSE_DISPLAY_MODE_STORAGE_KEY = 'planfixLicenseDisplayMode';
+const CARD_LICENSE_MODAL_SCALE_STORAGE_KEY = 'planfixLicenseModalScale';
 const CARD_LICENSE_DISPLAY_MODES = {
     cards: 'cards',
     list: 'list'
 };
+const CARD_LICENSE_MODAL_SCALE_STEPS = [50, 60, 70, 80, 90, 100, 110, 120, 130];
+const CARD_LICENSE_MODAL_SCALE_DEFAULT = 100;
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
@@ -631,6 +634,8 @@ let activeHelpDeskDraftRequestId = null;
 let activeHelpDeskDraftButton = null;
 let cardButtonThemeObserver = null;
 let cardLicenseModalThemeObserver = null;
+let cardLicenseModalScaleValue = CARD_LICENSE_MODAL_SCALE_DEFAULT;
+let cardLicenseModalScaleLoadPromise = null;
 
 const isCardHttpOnlyHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
@@ -1552,6 +1557,10 @@ const ensureCardLicenseModalStyles = () => {
     style.id = CARD_LICENSE_MODAL_STYLE_ID;
     style.textContent = `
         #${CARD_LICENSE_MODAL_ID} {
+            --dao-license-modal-scale: 1;
+            --dao-license-modal-frame-gap: 12px;
+            --dao-license-modal-controls-width: 118px;
+            --dao-license-modal-controls-total-width: calc(var(--dao-license-modal-controls-width) + var(--dao-license-modal-frame-gap));
             position: fixed;
             inset: 0;
             z-index: 2147483646;
@@ -1565,11 +1574,20 @@ const ensureCardLicenseModalStyles = () => {
             backdrop-filter: blur(8px) saturate(1.02);
         }
 
-        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
-            width: min(980px, 100%);
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__frame {
+            display: flex;
+            align-items: flex-start;
+            gap: var(--dao-license-modal-frame-gap);
+            width: min(calc(980px + var(--dao-license-modal-controls-total-width)), 100%);
             max-width: 100%;
-            height: min(94vh, 1080px);
-            height: min(94dvh, 1080px);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
+            flex: 1 1 auto;
+            width: min(980px, calc(100% - var(--dao-license-modal-controls-total-width)));
+            max-width: calc(100% - var(--dao-license-modal-controls-total-width));
+            height: min(85vh, 1080px);
+            height: min(85dvh, 1080px);
             max-height: calc(100vh - 48px);
             max-height: calc(100dvh - 48px);
             min-height: 0;
@@ -1584,6 +1602,84 @@ const ensureCardLicenseModalStyles = () => {
             overflow: hidden;
             color: #0f172a;
             font-family: "Inter", "Segoe UI", Arial, sans-serif;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__content-shell {
+            position: relative;
+            flex: 1 1 auto;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__content {
+            position: absolute;
+            inset: 0 auto auto 0;
+            display: flex;
+            flex-direction: column;
+            width: calc(100% / var(--dao-license-modal-scale));
+            min-width: calc(100% / var(--dao-license-modal-scale));
+            height: calc(100% / var(--dao-license-modal-scale));
+            min-height: calc(100% / var(--dao-license-modal-scale));
+            transform: scale(var(--dao-license-modal-scale));
+            transform-origin: top left;
+            will-change: transform;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__scale-controls {
+            flex: 0 0 var(--dao-license-modal-controls-width);
+            min-width: var(--dao-license-modal-controls-width);
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            padding: 8px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(15, 23, 42, 0.72);
+            box-shadow: 0 14px 32px rgba(2, 6, 23, 0.28);
+            backdrop-filter: blur(12px);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__scale-button {
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.14);
+            color: #f8fafc;
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__scale-button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__scale-button:disabled {
+            cursor: default;
+            opacity: 0.42;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__scale-value {
+            min-width: 34px;
+            color: #f8fafc;
+            font-size: 12px;
+            font-weight: 800;
+            line-height: 1;
+            text-align: center;
+            letter-spacing: 0.03em;
+            font-variant-numeric: tabular-nums;
+            user-select: none;
         }
 
         #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog::before {
@@ -2477,10 +2573,24 @@ const ensureCardLicenseModalStyles = () => {
                 padding: 12px;
             }
 
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__frame {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+                width: 100%;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__scale-controls {
+                order: -1;
+                align-self: flex-end;
+                min-width: 0;
+            }
+
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__dialog {
                 width: 100%;
-                height: min(94vh, 1080px);
-                height: min(94dvh, 1080px);
+                max-width: 100%;
+                height: min(85vh, 1080px);
+                height: min(85dvh, 1080px);
                 max-height: calc(100vh - 24px);
                 max-height: calc(100dvh - 24px);
             }
@@ -2713,6 +2823,107 @@ const getCardLicenseDisplayModeFromStorage = async () => new Promise((resolve) =
     });
 });
 
+const normalizeCardLicenseModalScale = (scale) => {
+    const numericScale = Number(scale);
+    if (!Number.isFinite(numericScale)) {
+        return CARD_LICENSE_MODAL_SCALE_DEFAULT;
+    }
+
+    return CARD_LICENSE_MODAL_SCALE_STEPS.reduce((closestScale, candidateScale) => (
+        Math.abs(candidateScale - numericScale) < Math.abs(closestScale - numericScale)
+            ? candidateScale
+            : closestScale
+    ), CARD_LICENSE_MODAL_SCALE_DEFAULT);
+};
+
+const getCardLicenseModalScaleFromStorage = async () => new Promise((resolve) => {
+    chrome.storage.local.get([CARD_LICENSE_MODAL_SCALE_STORAGE_KEY], (result) => {
+        if (chrome.runtime.lastError) {
+            resolve(CARD_LICENSE_MODAL_SCALE_DEFAULT);
+            return;
+        }
+
+        resolve(normalizeCardLicenseModalScale(result?.[CARD_LICENSE_MODAL_SCALE_STORAGE_KEY]));
+    });
+});
+
+const setCardLicenseModalScaleInStorage = async (scale) => new Promise((resolve) => {
+    const normalizedScale = normalizeCardLicenseModalScale(scale);
+    chrome.storage.local.set({ [CARD_LICENSE_MODAL_SCALE_STORAGE_KEY]: normalizedScale }, () => {
+        resolve(normalizedScale);
+    });
+});
+
+const syncCardLicenseModalScaleControls = (modal = document.getElementById(CARD_LICENSE_MODAL_ID), scale = cardLicenseModalScaleValue) => {
+    if (!(modal instanceof HTMLElement)) {
+        return;
+    }
+
+    const normalizedScale = normalizeCardLicenseModalScale(scale);
+    const scaleValueNode = modal.querySelector('[data-role="scale-value"]');
+    const scaleDownNode = modal.querySelector('[data-role="scale-down"]');
+    const scaleUpNode = modal.querySelector('[data-role="scale-up"]');
+    const minScale = CARD_LICENSE_MODAL_SCALE_STEPS[0];
+    const maxScale = CARD_LICENSE_MODAL_SCALE_STEPS[CARD_LICENSE_MODAL_SCALE_STEPS.length - 1];
+
+    if (scaleValueNode) {
+        scaleValueNode.textContent = `${normalizedScale}%`;
+    }
+
+    if (scaleDownNode instanceof HTMLButtonElement) {
+        scaleDownNode.disabled = normalizedScale <= minScale;
+    }
+
+    if (scaleUpNode instanceof HTMLButtonElement) {
+        scaleUpNode.disabled = normalizedScale >= maxScale;
+    }
+};
+
+const applyCardLicenseModalScale = (modal = document.getElementById(CARD_LICENSE_MODAL_ID), scale = cardLicenseModalScaleValue) => {
+    if (!(modal instanceof HTMLElement)) {
+        return;
+    }
+
+    const normalizedScale = normalizeCardLicenseModalScale(scale);
+    cardLicenseModalScaleValue = normalizedScale;
+    modal.dataset.scale = String(normalizedScale);
+    modal.style.setProperty('--dao-license-modal-scale', String(normalizedScale / 100));
+    syncCardLicenseModalScaleControls(modal, normalizedScale);
+};
+
+const ensureCardLicenseModalScaleLoaded = () => {
+    if (!cardLicenseModalScaleLoadPromise) {
+        cardLicenseModalScaleLoadPromise = getCardLicenseModalScaleFromStorage().then((scale) => {
+            applyCardLicenseModalScale(document.getElementById(CARD_LICENSE_MODAL_ID), scale);
+            return scale;
+        });
+    }
+
+    return cardLicenseModalScaleLoadPromise;
+};
+
+const stepCardLicenseModalScale = async (direction, modal = document.getElementById(CARD_LICENSE_MODAL_ID)) => {
+    if (!(modal instanceof HTMLElement)) {
+        return;
+    }
+
+    const normalizedScale = normalizeCardLicenseModalScale(cardLicenseModalScaleValue);
+    const currentIndex = CARD_LICENSE_MODAL_SCALE_STEPS.indexOf(normalizedScale);
+    const nextIndex = Math.min(
+        Math.max(currentIndex + direction, 0),
+        CARD_LICENSE_MODAL_SCALE_STEPS.length - 1
+    );
+    const nextScale = CARD_LICENSE_MODAL_SCALE_STEPS[nextIndex];
+
+    if (nextScale === normalizedScale) {
+        syncCardLicenseModalScaleControls(modal, normalizedScale);
+        return;
+    }
+
+    applyCardLicenseModalScale(modal, nextScale);
+    await setCardLicenseModalScaleInStorage(nextScale);
+};
+
 const buildCardLicenseOverviewPanel = (serverContext, serverInfo, licenses) => {
     const statusTone = resolveCardLicenseStatusTone(serverInfo.licenseStatus);
     const statusText = formatCardLicenseBusinessStatus(serverInfo.licenseStatus);
@@ -2881,20 +3092,31 @@ const ensureCardLicenseModalShell = () => {
         modal = document.createElement('div');
         modal.id = CARD_LICENSE_MODAL_ID;
         modal.innerHTML = `
-            <div class="dao-license-modal__dialog" role="dialog" aria-modal="true" aria-label="Ліцензії Syrve">
-                <div class="dao-license-modal__header">
-                    <div class="dao-license-modal__title-row">
-                        <div class="dao-license-modal__title-wrap" data-role="title-wrap" hidden>
-                            <h2 id="dao-license-modal-title" class="dao-license-modal__title" data-role="title"></h2>
-                            <p class="dao-license-modal__subtitle" data-role="subtitle"></p>
+            <div class="dao-license-modal__frame">
+                <div class="dao-license-modal__dialog" role="dialog" aria-modal="true" aria-label="Ліцензії Syrve">
+                    <div class="dao-license-modal__content-shell">
+                        <div class="dao-license-modal__content" data-role="content">
+                            <div class="dao-license-modal__header">
+                                <div class="dao-license-modal__title-row">
+                                    <div class="dao-license-modal__title-wrap" data-role="title-wrap" hidden>
+                                        <h2 id="dao-license-modal-title" class="dao-license-modal__title" data-role="title"></h2>
+                                        <p class="dao-license-modal__subtitle" data-role="subtitle"></p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="dao-license-modal__viewport" data-role="viewport">
+                                <div class="dao-license-modal__body" data-role="body"></div>
+                            </div>
+                            <div class="dao-license-modal__footer">
+                                <button type="button" class="dao-license-modal__button" data-role="close">Закрити</button>
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div class="dao-license-modal__viewport" data-role="viewport">
-                    <div class="dao-license-modal__body" data-role="body"></div>
-                </div>
-                <div class="dao-license-modal__footer">
-                    <button type="button" class="dao-license-modal__button" data-role="close">Закрити</button>
+                <div class="dao-license-modal__scale-controls" aria-label="Масштаб вмісту модального вікна">
+                    <button type="button" class="dao-license-modal__scale-button" data-role="scale-down" aria-label="Зменшити вміст модального вікна">−</button>
+                    <span class="dao-license-modal__scale-value" data-role="scale-value" aria-live="polite">100%</span>
+                    <button type="button" class="dao-license-modal__scale-button" data-role="scale-up" aria-label="Збільшити вміст модального вікна">+</button>
                 </div>
             </div>
         `;
@@ -2911,10 +3133,22 @@ const ensureCardLicenseModalShell = () => {
             });
         });
 
+        modal.querySelector('[data-role="scale-down"]')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            void stepCardLicenseModalScale(-1, modal);
+        });
+
+        modal.querySelector('[data-role="scale-up"]')?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            void stepCardLicenseModalScale(1, modal);
+        });
+
         document.body.appendChild(modal);
     }
 
     applyCardLicenseModalTheme(modal);
+    applyCardLicenseModalScale(modal, cardLicenseModalScaleValue);
+    void ensureCardLicenseModalScaleLoaded();
 
     return {
         modal,

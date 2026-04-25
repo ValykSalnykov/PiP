@@ -553,6 +553,10 @@
       color: #68708d;
     }
 
+    .setting-row__icon--layout {
+      color: var(--accent);
+    }
+
     .setting-row__icon--error {
       color: var(--danger);
     }
@@ -866,6 +870,10 @@
       <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
       <path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
     </symbol>
+    <symbol id="i-layout" viewBox="0 0 24 24">
+      <rect x="3" y="5" width="7" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="2" />
+      <path d="M14 7h7M14 10h7M4 15h16M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </symbol>
     <symbol id="i-warning" viewBox="0 0 24 24">
       <path d="M12 4.5 21 20H3L12 4.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
       <path d="M12 9.5v4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -994,6 +1002,23 @@
           <div class="mode-picker">
             <select id="modeSelect" class="mode-select" aria-label="Оберіть режим">
               <option value="">...</option>
+            </select>
+            <span class="mode-picker__chevron" aria-hidden="true"></span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-row__main">
+            <svg class="setting-row__icon setting-row__icon--layout" aria-hidden="true"><use href="#i-layout"></use></svg>
+            <div class="setting-row__copy">
+              <h2 class="setting-row__title">Вигляд ліцензій</h2>
+            </div>
+          </div>
+
+          <div class="mode-picker">
+            <select id="licenseDisplayMode" class="mode-select" aria-label="Оберіть вигляд ліцензій">
+              <option value="cards">Картки</option>
+              <option value="list">Список</option>
             </select>
             <span class="mode-picker__chevron" aria-hidden="true"></span>
           </div>

@@ -29,12 +29,14 @@
   }
 
   if (isHealthPage() && !loginElements && !hasReportedHealthPeriod()) {
-    waitForHealthPeriod()
-      .then((period) => {
+    waitForHealthSnapshot()
+      .then(({ period, version, versionRaw }) => {
         markHealthPeriodReported();
         chrome.runtime.sendMessage({
           action: 'SYRVE_HEALTH_PERIOD_RESULT',
-          period
+          period,
+          version,
+          versionRaw
         });
       })
       .catch((error) => {
@@ -112,22 +114,22 @@
     });
   }
 
-  function waitForHealthPeriod() {
-    const resolved = extractHealthPeriod();
+  function waitForHealthSnapshot() {
+    const resolved = extractHealthSnapshot();
     if (resolved !== null) {
       return Promise.resolve(resolved);
     }
 
     return new Promise((resolve, reject) => {
       const observer = new MutationObserver(() => {
-        const nextPeriod = extractHealthPeriod();
-        if (nextPeriod === null) {
+        const nextSnapshot = extractHealthSnapshot();
+        if (nextSnapshot === null) {
           return;
         }
 
         clearTimeout(timeoutId);
         observer.disconnect();
-        resolve(nextPeriod);
+        resolve(nextSnapshot);
       });
 
       const timeoutId = window.setTimeout(() => {
@@ -160,7 +162,28 @@
     };
   }
 
-  function extractHealthPeriod() {
+  function extractHealthVersionRaw(value) {
+    const match = String(value || '').match(/(\d+\.\d+\.\d+(?:\.\d+)*)/);
+    return match ? match[1] : '';
+  }
+
+  function normalizeHealthVersion(value) {
+    const rawVersion = extractHealthVersionRaw(value);
+    if (!rawVersion) {
+      return '';
+    }
+
+    const parts = rawVersion.split('.').filter(Boolean);
+    if (parts.length < 3) {
+      return '';
+    }
+
+    return [parts[0], parts[1], parts[2].slice(0, 1)]
+      .filter(Boolean)
+      .join('.');
+  }
+
+  function extractHealthSnapshot() {
     const rows = [...document.querySelectorAll('table tr')];
     if (rows.length < 2) {
       return null;
@@ -186,7 +209,17 @@
 
     const rawValue = valueCells[periodColumnIndex].textContent?.trim() || '';
     const matchedValue = rawValue.match(/\d+/);
-    return matchedValue ? matchedValue[0] : null;
+    if (!matchedValue) {
+      return null;
+    }
+
+    const versionCell = document.getElementById('version');
+    const versionRaw = extractHealthVersionRaw(versionCell?.textContent || '');
+    return {
+      period: matchedValue[0],
+      version: normalizeHealthVersion(versionRaw),
+      versionRaw
+    };
   }
 
   function fillField(field, value) {

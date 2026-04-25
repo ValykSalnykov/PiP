@@ -18,6 +18,7 @@ const portField = document.getElementById("portField");
 const sendDataButton = document.getElementById("sendDataButton");
 const modeInfo = document.getElementById("modeInfo");
 const modeSelect = document.getElementById("modeSelect");
+const licenseDisplaySelect = document.getElementById("licenseDisplayMode");
 const showErrorButton = document.getElementById("showErrorButton");
 const errorMessage = document.getElementById("errorMessage");
 const errorCountBadge = document.getElementById("errorCountBadge");
@@ -39,6 +40,7 @@ const STORAGE_KEYS = {
   accessNotice: "extensionAccessNotice",
   serverContext: "lastServerContext",
   modeDescriptions: "modeDescriptions",
+  licenseDisplayMode: "planfixLicenseDisplayMode",
   taskHighlightEnabled: "pipTimeTrackerTaskHighlightEnabled",
   taskHighlightColor: "pipTimeTrackerTaskHighlightColor",
   taskOverdueBlinkEnabled: "pipTimeTrackerTaskOverdueBlinkEnabled"
@@ -50,6 +52,11 @@ const INLINE_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const STATUS_BOX_TONES = ["neutral", "warning", "success", "error"];
 const STATUS_PILL_TONES = ["neutral", "warning", "success"];
 const MODE_TOGGLE_OPTION_VALUE = "__toggle__";
+const LICENSE_DISPLAY_MODE_VALUES = Object.freeze({
+  cards: "cards",
+  list: "list"
+});
+const DEFAULT_LICENSE_DISPLAY_MODE = LICENSE_DISPLAY_MODE_VALUES.cards;
 const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
   enabled: false,
   color: "#2fd212",
@@ -162,6 +169,33 @@ const renderModeSelect = ({ displayValue = "--", disabled = false } = {}) => {
   modeSelect.value = options.includes(currentModeDescription) ? currentModeDescription : options[0] || "";
   modeSelect.disabled = disabled;
   isSyncingModeSelect = false;
+};
+
+const normalizeLicenseDisplayMode = (value) => (
+  value === LICENSE_DISPLAY_MODE_VALUES.list
+    ? LICENSE_DISPLAY_MODE_VALUES.list
+    : DEFAULT_LICENSE_DISPLAY_MODE
+);
+
+const getStoredLicenseDisplayMode = (storageState = {}) => (
+  normalizeLicenseDisplayMode(storageState[STORAGE_KEYS.licenseDisplayMode])
+);
+
+const applyLicenseDisplayModeState = (mode) => {
+  if (!licenseDisplaySelect) {
+    return;
+  }
+
+  licenseDisplaySelect.value = normalizeLicenseDisplayMode(mode);
+};
+
+const persistLicenseDisplayMode = async (mode) => {
+  const nextMode = normalizeLicenseDisplayMode(mode);
+  applyLicenseDisplayModeState(nextMode);
+  await storageSet({
+    [STORAGE_KEYS.licenseDisplayMode]: nextMode
+  });
+  return nextMode;
 };
 
 const normalizeHexColor = (value, fallback = DEFAULT_TASK_HIGHLIGHT_SETTINGS.color) => {
@@ -911,12 +945,14 @@ const persistUserId = async () => {
   const result = await storageGet([
     STORAGE_KEYS.serverContext,
     STORAGE_KEYS.modeDescriptions,
+    STORAGE_KEYS.licenseDisplayMode,
     STORAGE_KEYS.taskHighlightEnabled,
     STORAGE_KEYS.taskHighlightColor,
     STORAGE_KEYS.taskOverdueBlinkEnabled
   ]);
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
   knownModeDescriptions = getStoredModeDescriptions(result);
+  const licenseDisplayMode = getStoredLicenseDisplayMode(result);
   const highlightSettings = getTaskHighlightSettings(result);
 
   setModeUI({
@@ -956,6 +992,7 @@ const persistUserId = async () => {
   renderAccessState();
 
   restoreServerContext(serverContext);
+  applyLicenseDisplayModeState(licenseDisplayMode);
   applyTaskHighlightSettingsState(highlightSettings);
 
   await refreshInlineServerError();
@@ -983,6 +1020,10 @@ taskOverdueBlinkToggle?.addEventListener("change", async () => {
     color: taskHighlightColorInput?.value,
     overdueBlinkEnabled: taskOverdueBlinkToggle.checked
   });
+});
+
+licenseDisplaySelect?.addEventListener("change", async () => {
+  await persistLicenseDisplayMode(licenseDisplaySelect.value);
 });
 
 editClientBtn?.addEventListener("click", () => {

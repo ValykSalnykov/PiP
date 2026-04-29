@@ -51,7 +51,7 @@ const DAO_SERVICE_ACTION_ICON_SOURCE_PATHS = {
 };
 const LOYALTY_PAGE_URL = 'https://loyalty.syrve.live/ru-RU';
 const LOYALTY_PASSWORD = 'iikoRMS351';
-const DAO_ACCESS_SERVER_BASE_URL = 'https://daologistics.duckdns.org';
+const DAO_ACCESS_SERVER_BASE_URL = 'https://slm.daolog.net';
 const EXTENSION_ACCESS_REQUEST_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/request`;
 const EXTENSION_ACCESS_CLAIM_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/claim`;
 const EXTENSION_ACCESS_STATE_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/state`;

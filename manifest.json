@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "DAO Tools+",
   "description": "Инструменты DAO для Planfix и Syrve: PiP на внутренних страницах, автологин и проверка серверов.",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "DAO Tools+",
@@ -24,7 +24,7 @@
     "storage"
   ],
   "host_permissions": [
-    "https://daologistics.duckdns.org/*",
+    "https://slm.daolog.net/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
     "https://planfix-to-syrve.com:8000/*",

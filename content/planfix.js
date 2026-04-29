@@ -83,7 +83,6 @@ const removeDiscoStyle = (button) => {
         button.style.border = originalStyles.border;
         button.style.boxShadow = originalStyles.boxShadow;
         button.style.textShadow = originalStyles.textShadow;
-        delete button.dataset.originalStyles;
     }
 };
 
@@ -430,6 +429,10 @@ const WEB_BUTTON_ID = 'open-server-web-url-button';
 const WEB_BUTTON_GROUP_ID = 'open-server-web-url-group';
 const API_BUTTON_ID = 'open-server-api-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
+const CARD_WEB_API_BUTTON_OVERLAP_PX = 12;
+const CARD_WEB_API_BUTTON_EXPANDED_SHIFT_PX = 6;
+const CARD_WEB_API_BUTTON_COLLAPSED_SHIFT_PX = -14;
+const CARD_WEB_API_BUTTON_CLEARANCE_PX = 8;
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_LICENSE_DISPLAY_MODE_STORAGE_KEY = 'planfixLicenseDisplayMode';
@@ -450,6 +453,7 @@ const LEGACY_LICENSE_MANAGER_BASE = 'https://syrve-license-manager-1038989357415
 const CARD_LICENSE_MODAL_SCALE_STEPS = [50, 60, 70, 80, 90, 100, 110, 120, 130];
 const CARD_LICENSE_MODAL_SCALE_DEFAULT = 100;
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
+const CARD_SERVER_AVAILABILITY_SERVICE_OFFLINE_ICON = 'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 10%27%3E%3Cpath d=%27M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8%27 stroke=%27%23ffffff%27 stroke-width=%271.8%27 stroke-linecap=%27round%27/%3E%3C/svg%3E")';
 const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
 const CARD_LOGIN_SUCCESS_RESET_MS = 1400;
@@ -625,6 +629,11 @@ const CARD_HTTP_ONLY_DOMAINS = ['daocloud.fun'];
 const HELPDESK_DEFAULT_PRIORITY = 'Блокуюче';
 const CARD_ERROR_SOURCE_MANUAL = 'manual';
 const CARD_ERROR_SOURCE_SERVER_POLL = 'server-poll';
+const DAO_SERVICE_STATUS_STATES = {
+    checking: 'checking',
+    online: 'online',
+    offline: 'offline'
+};
 
 let cardErrorPollToken = 0;
 let activePeriodRequestId = null;
@@ -646,6 +655,42 @@ let cardLicenseModalThemeObserver = null;
 let cardLicenseModalScaleValue = CARD_LICENSE_MODAL_SCALE_DEFAULT;
 let cardLicenseModalScaleLoadPromise = null;
 let activeBulkLicenseRun = null;
+
+const normalizeCardDaoServiceStatus = (value = {}) => {
+    const normalizedState = String(value?.state || '').trim().toLowerCase();
+    const numericStatusCode = Number(value?.statusCode);
+
+    return {
+        state: Object.values(DAO_SERVICE_STATUS_STATES).includes(normalizedState)
+            ? normalizedState
+            : DAO_SERVICE_STATUS_STATES.checking,
+        checkedAt: typeof value?.checkedAt === 'string' ? value.checkedAt.trim() : '',
+        statusCode: Number.isInteger(numericStatusCode) ? numericStatusCode : null,
+        error: typeof value?.error === 'string' ? value.error.trim() : ''
+    };
+};
+
+const isCardDaoServiceOffline = (status) => normalizeCardDaoServiceStatus(status).state === DAO_SERVICE_STATUS_STATES.offline;
+
+const buildCardDaoServiceUnavailableMessage = (status, subject) => {
+    const normalizedStatus = normalizeCardDaoServiceStatus(status);
+    const normalizedSubject = String(subject || '').trim() || 'Ця дія';
+    const detail = normalizedStatus.error ? ` ${normalizedStatus.error}` : '';
+    return `DAO backend офлайн. ${normalizedSubject} тимчасово недоступна.${detail}`;
+};
+
+const getCardDaoServiceStatus = () => new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+        action: 'GET_DAO_SERVICE_STATUS'
+    }, (response) => {
+        if (chrome.runtime.lastError || !response?.ok) {
+            resolve({ state: DAO_SERVICE_STATUS_STATES.checking });
+            return;
+        }
+
+        resolve(normalizeCardDaoServiceStatus(response.status));
+    });
+});
 
 const isCardHttpOnlyHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
@@ -739,77 +784,6 @@ const isCardApiAutologinSupportedHost = (server) => {
     return normalizedServer === 'syrve.app' || normalizedServer.endsWith(CARD_API_SUPPORTED_HOST_SUFFIX);
 };
 
-const selectPreferredCardApiAddress = (rawAddress) => {
-    const candidates = splitCardServerAddressCandidates(rawAddress)
-        .map((part) => {
-            const endpoint = parseCardServerEndpoint(part);
-            if (!endpoint?.server) {
-                return null;
-            }
-
-            return {
-                raw: part,
-                server: endpoint.server,
-                port: endpoint.port,
-                hostType: classifyCardServerHost(endpoint.server)
-            };
-        })
-        .filter(Boolean);
-
-    const syrveCandidate = candidates.find((candidate) => isCardApiAutologinSupportedHost(candidate.server));
-    if (syrveCandidate) {
-        return syrveCandidate;
-    }
-
-    if (candidates.some((candidate) => candidate.hostType === 'private-ipv4')) {
-        return { errorCode: 'private-only' };
-    }
-
-    return { errorCode: 'not-found' };
-};
-
-const resolveCardApiServerContextFromRawInput = (rawServer, port) => {
-    const selection = selectPreferredCardApiAddress(rawServer);
-    if (!selection?.server) {
-        return {
-            context: null,
-            errorMessage: 'Автовхід API доступний лише для серверів *.syrve.app.'
-        };
-    }
-
-    const context = resolveCardServerContext(selection, port);
-    if (!context?.server) {
-        return {
-            context: null,
-            errorMessage: 'Адресу сервера не знайдено. Перевірте поле адреси.'
-        };
-    }
-
-    if (requiresCardExplicitPort(context.server) && !context.port) {
-        return {
-            context: null,
-            errorMessage: buildCardPortRequiredErrorMessage(context.server)
-        };
-    }
-
-    return {
-        context,
-        selection
-    };
-};
-
-const buildCardApiUrl = (context) => {
-    if (!context?.server) {
-        throw new Error('Адресу сервера не знайдено. Перевірте картку ресторану.');
-    }
-
-    if (!isCardApiAutologinSupportedHost(context.server)) {
-        throw new Error('Автовхід API доступний лише для серверів *.syrve.app.');
-    }
-
-    return buildCardServerUrl(context, CARD_API_PATH);
-};
-
 const getCardServerAvailabilityCacheKey = (context) => getCardServerAvailabilityUrl(context);
 
 const applyRecentCardServerAvailabilitySnapshot = (cacheKey, field72ValueElement) => {
@@ -835,6 +809,24 @@ const resolveCardServerAvailabilityTarget = (field72ValueElement) => {
     }
 
     return document.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
+};
+
+const resolveCardServerAvailabilityFailureState = (message = '') => {
+    const normalizedMessage = String(message || '').trim().toLowerCase();
+    if (!normalizedMessage) {
+        return 'service-offline';
+    }
+
+    const serviceFailureMarkers = [
+        'сервер перевірки доступності',
+        'сервера перевірки доступності',
+        'x-extension-key',
+        'персональний доступ цього пристрою до перевірки доступності'
+    ];
+
+    return serviceFailureMarkers.some((marker) => normalizedMessage.includes(marker))
+        ? 'service-offline'
+        : 'offline';
 };
 
 const invalidateCardErrorPolling = () => {
@@ -901,7 +893,10 @@ const ensureCardServerAvailabilityNode = (field72ValueElement) => {
             display: inline-block;
             flex: 0 0 10px;
             background: #9ca3af;
-            transition: background 0.18s ease, transform 0.18s ease;
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 8px 8px;
+            transition: background 0.18s ease, transform 0.18s ease, background-image 0.18s ease;
         `;
     }
 
@@ -934,11 +929,17 @@ const setCardServerAvailabilityState = (state, message = '', field72ValueElement
         offline: {
             background: '#dc2626',
             transform: 'scale(1)'
+        },
+        'service-offline': {
+            background: '#dc2626',
+            transform: 'scale(1)',
+            backgroundImage: CARD_SERVER_AVAILABILITY_SERVICE_OFFLINE_ICON
         }
     };
 
     const config = stateMap[state] || stateMap.idle;
     statusNode.style.background = config.background;
+    statusNode.style.backgroundImage = config.backgroundImage || 'none';
     statusNode.style.transform = config.transform;
     statusNode.title = message || '';
 };
@@ -1014,14 +1015,15 @@ const probeCardServerAvailability = async (context, field72ValueElement, request
         }
 
         const nextMessage = error?.message || `Не вдалося підключитися до ${url}.`;
+        const nextState = resolveCardServerAvailabilityFailureState(nextMessage);
         cardServerAvailabilitySnapshot = {
             key: cacheKey,
             checkedAt: Date.now(),
-            state: 'offline',
+            state: nextState,
             message: nextMessage
         };
         setCardServerAvailabilityState(
-            'offline',
+            nextState,
             nextMessage,
             resolveCardServerAvailabilityTarget(field72ValueElement)
         );
@@ -3967,6 +3969,12 @@ const startBulkLicenseQueue = ({ action, sourceLabel, targets, bulkModeFormat = 
 };
 
 const handleCardLicenseCheck = async (button, serverContext) => {
+    const daoServiceStatus = await getCardDaoServiceStatus();
+    if (isCardDaoServiceOffline(daoServiceStatus)) {
+        setCardErrorMessage(buildCardDaoServiceUnavailableMessage(daoServiceStatus, 'Перевірка ліцензій'));
+        return;
+    }
+
     const requestToken = ++cardLicenseCheckRequestToken;
     activeCardLicenseCheckButton = button;
     button.dataset.licenseCheckToken = String(requestToken);
@@ -5247,6 +5255,17 @@ const pollCardServerError = async (context, options = {}) => {
         return parsedUrl.toString();
     };
 
+    const buildCardApiUrl = (webUrl) => {
+        const normalizedWebUrl = normalizeCardWebUrl(webUrl);
+        const parsedWebUrl = new URL(normalizedWebUrl);
+
+        if (!isCardApiAutologinSupportedHost(parsedWebUrl.hostname)) {
+            throw new Error('Поле Web: посилання має вести на сервер *.syrve.app для автовходу API.');
+        }
+
+        return new URL(CARD_API_PATH, `${parsedWebUrl.origin}/`).toString();
+    };
+
     const buildHelpDeskDraftTitle = (payload) => `(...) - ${payload.restaurantName || '—'}`;
 
     const buildHelpDeskDraftDescription = (payload) => ([
@@ -5310,14 +5329,6 @@ const pollCardServerError = async (context, options = {}) => {
         return resolveCardServerContextFromRawInput(rawServer, port);
     };
 
-    const getCardApiServerResolution = (scopeRoot = document) => {
-        const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
-        const rawServer = serverField ? serverField.textContent.trim() : '';
-        const portField = scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
-        const port = portField ? portField.textContent.trim() : '';
-        return resolveCardApiServerContextFromRawInput(rawServer, port);
-    };
-
     const getServerData = (scopeRoot = document, showAlert = true) => {
         const serverResolution = getCardServerResolution(scopeRoot);
 
@@ -5348,10 +5359,14 @@ const pollCardServerError = async (context, options = {}) => {
             transition: opacity 0.2s ease;
             white-space: nowrap;
         `;
-        btn.addEventListener('mouseenter', () => { btn.style.opacity = "0.82"; });
+        btn.addEventListener('mouseenter', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '0.82';
+            }
+        });
         btn.addEventListener('mouseleave', () => {
             if (!btn.disabled) {
-                btn.style.opacity = "1";
+                btn.style.opacity = '1';
             }
         });
         btn.addEventListener('click', async () => {
@@ -5444,6 +5459,28 @@ const pollCardServerError = async (context, options = {}) => {
         });
     });
 
+    const syncCardWebActionGroupTrailingSpace = (group) => {
+        if (!(group instanceof HTMLElement)) {
+            return;
+        }
+
+        const apiButton = group.querySelector(`#${API_BUTTON_ID}`);
+        if (!(apiButton instanceof HTMLButtonElement) || group.dataset.expanded !== 'true') {
+            group.style.marginRight = '0';
+            return;
+        }
+
+        const reservedRightSpace = Math.max(
+            0,
+            apiButton.offsetWidth
+                - CARD_WEB_API_BUTTON_OVERLAP_PX
+                + CARD_WEB_API_BUTTON_EXPANDED_SHIFT_PX
+                + CARD_WEB_API_BUTTON_CLEARANCE_PX
+        );
+
+        group.style.marginRight = reservedRightSpace > 0 ? `${Math.ceil(reservedRightSpace)}px` : '0';
+    };
+
     const setCardWebActionGroupExpanded = (group, expanded) => {
         if (!(group instanceof HTMLElement)) {
             return;
@@ -5459,9 +5496,16 @@ const pollCardServerError = async (context, options = {}) => {
         group.style.zIndex = shouldExpand ? '14' : '0';
         apiButton.style.opacity = shouldExpand ? '1' : '0';
         apiButton.style.transform = shouldExpand
-            ? 'translate(6px, -50%) scale(1)'
-            : 'translate(-14px, -50%) scale(0.96)';
+            ? `translate(${CARD_WEB_API_BUTTON_EXPANDED_SHIFT_PX}px, -50%) scale(1)`
+            : `translate(${CARD_WEB_API_BUTTON_COLLAPSED_SHIFT_PX}px, -50%) scale(0.96)`;
         apiButton.style.pointerEvents = shouldExpand ? 'auto' : 'none';
+
+        if (!shouldExpand) {
+            group.style.marginRight = '0';
+            return;
+        }
+
+        syncCardWebActionGroupTrailingSpace(group);
     };
 
     const syncCardWebActionGroupExpandedState = (group) => {
@@ -5674,9 +5718,9 @@ const pollCardServerError = async (context, options = {}) => {
             white-space: nowrap;
             position: absolute;
             top: 50%;
-            left: calc(100% - 12px);
+            left: calc(100% - ${CARD_WEB_API_BUTTON_OVERLAP_PX}px);
             opacity: 0;
-            transform: translate(-14px, -50%) scale(0.96);
+            transform: translate(${CARD_WEB_API_BUTTON_COLLAPSED_SHIFT_PX}px, -50%) scale(0.96);
             transform-origin: left center;
             pointer-events: none;
             z-index: 0;
@@ -5732,12 +5776,7 @@ const pollCardServerError = async (context, options = {}) => {
             let apiUrl;
 
             try {
-                const serverResolution = getCardApiServerResolution(currentScopeRoot);
-                if (!serverResolution.context) {
-                    throw new Error(serverResolution.errorMessage || 'Адресу сервера не знайдено. Перевірте картку ресторану.');
-                }
-
-                apiUrl = buildCardApiUrl(serverResolution.context);
+                apiUrl = buildCardApiUrl(getCardWebUrl(currentScopeRoot));
             } catch (error) {
                 invalidateCardErrorPolling();
                 clearCardErrorMessage();

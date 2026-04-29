@@ -34,6 +34,21 @@ const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
 const SYRVE_CREDENTIAL_TTL_MS = 120000;
 const HELPDESK_DRAFT_REQUEST_TTL_MS = 5 * 60 * 1000;
+const DAO_SERVICE_STATUS_TIMEOUT_MS = 10000;
+const DAO_SERVICE_STATUS_ALARM_NAME = 'dao-service-status-refresh';
+const DAO_SERVICE_STATUS_ALARM_PERIOD_MINUTES = 1;
+const DAO_SERVICE_STATUS_STALE_MS = 2 * 60 * 1000;
+const DEFAULT_ACTION_ICON_PATHS = {
+  16: 'icons/icon16.png',
+  48: 'icons/icon48.png',
+  128: 'icons/icon128.png'
+};
+const DAO_SERVICE_ACTION_ICON_SIZES = [16, 32, 48];
+const DAO_SERVICE_ACTION_ICON_SOURCE_PATHS = {
+  16: 'icons/icon16.png',
+  32: 'icons/icon48.png',
+  48: 'icons/icon48.png'
+};
 const LOYALTY_PAGE_URL = 'https://loyalty.syrve.live/ru-RU';
 const LOYALTY_PASSWORD = 'iikoRMS351';
 const DAO_ACCESS_SERVER_BASE_URL = 'https://daologistics.duckdns.org';
@@ -54,14 +69,36 @@ const STORAGE_KEYS = {
   extensionScopes: 'extensionAccessScopes',
   bulkModeFormat: 'extensionBulkModeFormat',
   accessNotice: 'extensionAccessNotice',
+  daoServiceStatus: 'daoServiceStatus',
   helpDeskDraftRequests: 'helpDeskDraftRequests',
   helpDeskNextDraftNumber: 'helpDeskNextDraftNumber'
 };
+const actionIconBitmapCache = new Map();
+const daoServiceActionIconCache = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   log.info('Extension installed or updated');
-  chrome.action.setBadgeBackgroundColor({ color: '#2563EB' });
-  chrome.action.setBadgeText({ text: '' });
+  ensureDaoServiceStatusAlarm();
+  refreshDaoServiceStatusCache().catch((error) => {
+    log.warn('Failed to refresh DAO service status after install/update', { error: error?.message || error });
+  });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureDaoServiceStatusAlarm();
+  refreshDaoServiceStatusCache().catch((error) => {
+    log.warn('Failed to refresh DAO service status on browser startup', { error: error?.message || error });
+  });
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== DAO_SERVICE_STATUS_ALARM_NAME) {
+    return;
+  }
+
+  refreshDaoServiceStatusCache().catch((error) => {
+    log.warn('Failed to refresh DAO service status from alarm', { error: error?.message || error });
+  });
 });
 
 function isSupportedUrl(url) {
@@ -1027,6 +1064,238 @@ async function fetchRemoteExtensionAccessState() {
   return payload?.access || {};
 }
 
+function normalizeDaoServiceStatusState(value) {
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  return ['checking', 'online', 'offline'].includes(normalizedValue) ? normalizedValue : 'checking';
+}
+
+function buildDaoServiceStatus(result = {}) {
+  const numericStatusCode = Number(result?.statusCode);
+  return {
+    state: normalizeDaoServiceStatusState(result?.state),
+    checkedAt: typeof result?.checkedAt === 'string' && result.checkedAt.trim()
+      ? result.checkedAt.trim()
+      : new Date().toISOString(),
+    statusCode: Number.isInteger(numericStatusCode) ? numericStatusCode : null,
+    error: typeof result?.error === 'string' && result.error.trim() ? result.error.trim() : ''
+  };
+}
+
+function buildDaoServiceStatusErrorMessage(statusCode) {
+  if (!Number.isInteger(statusCode)) {
+    return 'DAO backend повернув помилкову відповідь.';
+  }
+
+  return `DAO backend повернув HTTP ${statusCode}.`;
+}
+
+function isDaoServiceStatusStale(status) {
+  const checkedAtValue = typeof status?.checkedAt === 'string' ? status.checkedAt.trim() : '';
+  if (!checkedAtValue) {
+    return true;
+  }
+
+  const checkedAtTime = new Date(checkedAtValue).getTime();
+  if (!Number.isFinite(checkedAtTime)) {
+    return true;
+  }
+
+  return Date.now() - checkedAtTime >= DAO_SERVICE_STATUS_STALE_MS;
+}
+
+function buildDaoServiceActionTitle(status) {
+  if (status.state === 'online') {
+    const statusSuffix = Number.isInteger(status.statusCode) ? ` (HTTP ${status.statusCode})` : '';
+    return `DAO Tools+ • Сервіс онлайн${statusSuffix}`;
+  }
+
+  if (status.state === 'offline') {
+    if (status.error) {
+      return `DAO Tools+ • Сервіс офлайн • ${status.error}`;
+    }
+
+    if (Number.isInteger(status.statusCode)) {
+      return `DAO Tools+ • Сервіс офлайн • HTTP ${status.statusCode}`;
+    }
+
+    return 'DAO Tools+ • Сервіс офлайн';
+  }
+
+  return 'DAO Tools+ • Перевірка сервісу';
+}
+
+function getDaoServiceIndicatorColor(state) {
+  if (state === 'online') {
+    return '#16a34a';
+  }
+
+  if (state === 'offline') {
+    return '#dc2626';
+  }
+
+  return '';
+}
+
+async function loadActionIconBitmap(path) {
+  if (!actionIconBitmapCache.has(path)) {
+    actionIconBitmapCache.set(path, (async () => {
+      const response = await fetch(chrome.runtime.getURL(path));
+      if (!response.ok) {
+        throw new Error(`Не вдалося завантажити action icon: ${path}`);
+      }
+
+      const blob = await response.blob();
+      return createImageBitmap(blob);
+    })());
+  }
+
+  return actionIconBitmapCache.get(path);
+}
+
+async function buildDaoServiceActionIconFrame(size, state) {
+  const sourcePath = DAO_SERVICE_ACTION_ICON_SOURCE_PATHS[size] || DEFAULT_ACTION_ICON_PATHS[48];
+  const sourceBitmap = await loadActionIconBitmap(sourcePath);
+  const canvas = new OffscreenCanvas(size, size);
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('Не вдалося створити контекст для action icon.');
+  }
+
+  context.clearRect(0, 0, size, size);
+  context.drawImage(sourceBitmap, 0, 0, size, size);
+
+  const indicatorColor = getDaoServiceIndicatorColor(state);
+  if (!indicatorColor) {
+    return context.getImageData(0, 0, size, size);
+  }
+
+  const outerRadius = size <= 16 ? 3 : size <= 32 ? 4.5 : 6;
+  const innerRadius = outerRadius - (size <= 16 ? 1 : 1.25);
+  const offset = size <= 16 ? 1 : size <= 32 ? 1.5 : 2;
+  const centerX = size - outerRadius - offset;
+  const centerY = size - outerRadius - offset;
+
+  context.beginPath();
+  context.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
+  context.fillStyle = 'rgba(255, 255, 255, 0.96)';
+  context.fill();
+
+  context.beginPath();
+  context.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+  context.fillStyle = indicatorColor;
+  context.fill();
+
+  return context.getImageData(0, 0, size, size);
+}
+
+async function getDaoServiceActionIconImageData(state) {
+  if (!daoServiceActionIconCache.has(state)) {
+    daoServiceActionIconCache.set(state, (async () => {
+      const imageData = {};
+
+      for (const size of DAO_SERVICE_ACTION_ICON_SIZES) {
+        imageData[size] = await buildDaoServiceActionIconFrame(size, state);
+      }
+
+      return imageData;
+    })());
+  }
+
+  return daoServiceActionIconCache.get(state);
+}
+
+async function applyDaoServiceActionBadge(status) {
+  const normalizedStatus = buildDaoServiceStatus(status);
+  const hasIndicator = normalizedStatus.state === 'online' || normalizedStatus.state === 'offline';
+
+  const iconOptions = hasIndicator
+    ? { imageData: await getDaoServiceActionIconImageData(normalizedStatus.state) }
+    : { path: DEFAULT_ACTION_ICON_PATHS };
+
+  await chrome.action.setTitle({
+    title: buildDaoServiceActionTitle(normalizedStatus)
+  });
+
+  await chrome.action.setBadgeText({
+    text: ''
+  });
+
+  await chrome.action.setIcon(iconOptions);
+}
+
+async function getStoredDaoServiceStatus() {
+  const storageData = await storageGet([STORAGE_KEYS.daoServiceStatus]);
+  return buildDaoServiceStatus(storageData?.[STORAGE_KEYS.daoServiceStatus]);
+}
+
+async function persistDaoServiceStatus(status) {
+  const normalizedStatus = buildDaoServiceStatus(status);
+  await storageSet({
+    [STORAGE_KEYS.daoServiceStatus]: normalizedStatus
+  });
+  applyDaoServiceActionBadge(normalizedStatus);
+  return normalizedStatus;
+}
+
+function ensureDaoServiceStatusAlarm() {
+  chrome.alarms.create(DAO_SERVICE_STATUS_ALARM_NAME, {
+    periodInMinutes: DAO_SERVICE_STATUS_ALARM_PERIOD_MINUTES
+  });
+}
+
+async function getDaoServiceStatus(options = {}) {
+  const { refresh = false } = options;
+  const cachedStatus = await getStoredDaoServiceStatus();
+  applyDaoServiceActionBadge(cachedStatus);
+
+  if (!refresh && cachedStatus.state !== 'checking' && !isDaoServiceStatusStale(cachedStatus)) {
+    return cachedStatus;
+  }
+
+  return refreshDaoServiceStatusCache();
+}
+
+async function refreshDaoServiceStatusCache() {
+  const status = await fetchDaoServiceStatus();
+  return persistDaoServiceStatus(status);
+}
+
+async function fetchDaoServiceStatus() {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DAO_SERVICE_STATUS_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(DAO_ACCESS_SERVER_BASE_URL, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      return buildDaoServiceStatus({
+        state: 'offline',
+        statusCode: response.status,
+        error: buildDaoServiceStatusErrorMessage(response.status)
+      });
+    }
+
+    return buildDaoServiceStatus({
+      state: 'online',
+      statusCode: response.status
+    });
+  } catch (error) {
+    return buildDaoServiceStatus({
+      state: 'offline',
+      error: error?.name === 'AbortError'
+        ? 'Час очікування відповіді DAO backend вичерпано.'
+        : 'Не вдалося звернутися до DAO backend.'
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function sanitizeLicenseCheckServer(server) {
   if (!server || typeof server !== 'object') {
     return {};
@@ -1573,6 +1842,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getExtensionAccessState()
       .then((state) => sendResponse({ ok: true, state }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to read extension access state' }));
+
+    return true;
+  }
+
+  if (message?.action === 'GET_DAO_SERVICE_STATUS') {
+    getDaoServiceStatus({ refresh: message.refresh === true })
+      .then((status) => sendResponse({ ok: true, status }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to read DAO service status' }));
 
     return true;
   }

@@ -30,6 +30,7 @@ const inlineServerError = document.getElementById("inlineServerError");
 const clientStatus = document.getElementById("clientStatus");
 const clientIdBadge = document.getElementById("clientIdBadge");
 const editClientBtn = document.getElementById("editClientBtn");
+const daoServiceStatusBadge = document.getElementById("daoServiceStatusBadge");
 
 const STORAGE_KEYS = {
   userId: "userInput",
@@ -38,6 +39,7 @@ const STORAGE_KEYS = {
   extensionRequestId: "extensionAccessRequestId",
   extensionKey: "extensionAccessKey",
   accessNotice: "extensionAccessNotice",
+  daoServiceStatus: "daoServiceStatus",
   serverContext: "lastServerContext",
   modeDescriptions: "modeDescriptions",
   licenseDisplayMode: "planfixLicenseDisplayMode",
@@ -50,8 +52,13 @@ const KNOWN_443_DOMAINS = ["syrve.online", "daocloud.it"];
 const HTTP_ONLY_DOMAINS = ["daocloud.fun"];
 const INLINE_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const STATUS_BOX_TONES = ["neutral", "warning", "success", "error"];
-const STATUS_PILL_TONES = ["neutral", "warning", "success"];
+const STATUS_PILL_TONES = ["neutral", "warning", "success", "error"];
 const MODE_TOGGLE_OPTION_VALUE = "__toggle__";
+const DAO_SERVICE_STATUS_STATES = Object.freeze({
+  checking: "checking",
+  online: "online",
+  offline: "offline"
+});
 const LICENSE_DISPLAY_MODE_VALUES = Object.freeze({
   cards: "cards",
   list: "list"
@@ -69,6 +76,7 @@ let isAccessSetupForced = false;
 let knownModeDescriptions = [];
 let currentModeDescription = "";
 let isSyncingModeSelect = false;
+let daoServiceStatusRequest = null;
 
 const storageGet = (keys) => new Promise((resolve) => {
   chrome.storage.local.get(keys, (result) => {
@@ -351,6 +359,134 @@ const setAccessMessage = (message, tone = "neutral") => {
 const clearAccessMessage = () => {
   setAccessMessage("");
 };
+
+const normalizeDaoServiceStatus = (value = {}) => {
+  const normalizedState = String(value?.state || "").trim().toLowerCase();
+  const numericStatusCode = Number(value?.statusCode);
+
+  return {
+    state: Object.values(DAO_SERVICE_STATUS_STATES).includes(normalizedState)
+      ? normalizedState
+      : DAO_SERVICE_STATUS_STATES.checking,
+    checkedAt: typeof value?.checkedAt === "string" ? value.checkedAt.trim() : "",
+    statusCode: Number.isInteger(numericStatusCode) ? numericStatusCode : null,
+    error: typeof value?.error === "string" ? value.error.trim() : ""
+  };
+};
+
+const buildDaoServiceStatusLabel = (status) => {
+  switch (status.state) {
+    case DAO_SERVICE_STATUS_STATES.online:
+      return "Сервіс онлайн";
+    case DAO_SERVICE_STATUS_STATES.offline:
+      return "Сервіс офлайн";
+    default:
+      return "Перевірка...";
+  }
+};
+
+const resolveDaoServiceStatusTone = (status) => {
+  switch (status.state) {
+    case DAO_SERVICE_STATUS_STATES.online:
+      return "success";
+    case DAO_SERVICE_STATUS_STATES.offline:
+      return "error";
+    default:
+      return "neutral";
+  }
+};
+
+const formatDaoServiceStatusCheckedAt = (value) => {
+  if (!value) {
+    return "";
+  }
+
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "";
+  }
+
+  return parsedDate.toLocaleTimeString("uk-UA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+};
+
+const buildDaoServiceStatusTitle = (status) => {
+  const details = [buildDaoServiceStatusLabel(status)];
+  const checkedAtLabel = formatDaoServiceStatusCheckedAt(status.checkedAt);
+
+  if (checkedAtLabel) {
+    details.push(`Оновлено: ${checkedAtLabel}`);
+  }
+
+  if (status.statusCode !== null) {
+    details.push(`HTTP ${status.statusCode}`);
+  }
+
+  if (status.error) {
+    details.push(status.error);
+  }
+
+  return details.join("\n");
+};
+
+const updateDaoServiceStatusUI = (value = {}) => {
+  const status = normalizeDaoServiceStatus(value);
+  if (!daoServiceStatusBadge) {
+    return status;
+  }
+
+  const label = buildDaoServiceStatusLabel(status);
+  daoServiceStatusBadge.textContent = label;
+  daoServiceStatusBadge.setAttribute("aria-label", label);
+  daoServiceStatusBadge.title = buildDaoServiceStatusTitle(status);
+  applyStatusTone(daoServiceStatusBadge, "status-pill", resolveDaoServiceStatusTone(status), STATUS_PILL_TONES);
+  return status;
+};
+
+const fetchDaoServiceStatus = async (forceRefresh = false) => {
+  const response = await sendRuntimeMessage({ action: "GET_DAO_SERVICE_STATUS", refresh: forceRefresh });
+  return normalizeDaoServiceStatus(response.status);
+};
+
+const refreshDaoServiceStatus = async (forceRefresh = false) => {
+  if (daoServiceStatusRequest) {
+    return daoServiceStatusRequest;
+  }
+
+  daoServiceStatusRequest = (async () => {
+    try {
+      const nextStatus = await fetchDaoServiceStatus(forceRefresh);
+      return updateDaoServiceStatusUI(nextStatus);
+    } catch (error) {
+      return updateDaoServiceStatusUI({
+        state: DAO_SERVICE_STATUS_STATES.offline,
+        error: error?.message || "Не вдалося оновити статус сервісу."
+      });
+    } finally {
+      daoServiceStatusRequest = null;
+    }
+  })();
+
+  return daoServiceStatusRequest;
+};
+
+const handlePopupStorageChange = (changes, areaName) => {
+  if (areaName !== "local") {
+    return;
+  }
+
+  const nextServiceStatus = changes[STORAGE_KEYS.daoServiceStatus]?.newValue;
+  if (nextServiceStatus === undefined) {
+    return;
+  }
+
+  updateDaoServiceStatusUI(nextServiceStatus);
+};
+
+chrome.storage.onChanged.addListener(handlePopupStorageChange);
 
 const getAccessViewModel = (state, isForced) => {
   const status = state?.status || "needs-user";
@@ -942,7 +1078,10 @@ const persistUserId = async () => {
 
 // Завантаження popup state
 (async () => {
+  updateDaoServiceStatusUI({ state: DAO_SERVICE_STATUS_STATES.checking });
+
   const result = await storageGet([
+    STORAGE_KEYS.daoServiceStatus,
     STORAGE_KEYS.serverContext,
     STORAGE_KEYS.modeDescriptions,
     STORAGE_KEYS.licenseDisplayMode,
@@ -951,9 +1090,12 @@ const persistUserId = async () => {
     STORAGE_KEYS.taskOverdueBlinkEnabled
   ]);
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
+  const daoServiceStatus = result[STORAGE_KEYS.daoServiceStatus] || null;
   knownModeDescriptions = getStoredModeDescriptions(result);
   const licenseDisplayMode = getStoredLicenseDisplayMode(result);
   const highlightSettings = getTaskHighlightSettings(result);
+
+  updateDaoServiceStatusUI(daoServiceStatus || { state: DAO_SERVICE_STATUS_STATES.checking });
 
   setModeUI({
     value: "...",
@@ -996,6 +1138,7 @@ const persistUserId = async () => {
   applyTaskHighlightSettingsState(highlightSettings);
 
   await refreshInlineServerError();
+  await refreshDaoServiceStatus(true);
 })();
 
 taskHighlightToggle?.addEventListener("change", async () => {

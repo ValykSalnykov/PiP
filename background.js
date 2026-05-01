@@ -51,7 +51,7 @@ const DAO_SERVICE_ACTION_ICON_SOURCE_PATHS = {
 };
 const LOYALTY_PAGE_URL = 'https://loyalty.syrve.live/ru-RU';
 const LOYALTY_PASSWORD = 'iikoRMS351';
-const DAO_ACCESS_SERVER_BASE_URL = 'https://slm.daolog.net';
+const DAO_ACCESS_SERVER_BASE_URL = 'https://daologistics.duckdns.org';
 const EXTENSION_ACCESS_REQUEST_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/request`;
 const EXTENSION_ACCESS_CLAIM_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/claim`;
 const EXTENSION_ACCESS_STATE_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/state`;
@@ -1358,6 +1358,38 @@ function sanitizeLicenseCheckLicenses(licenses) {
   }, []);
 }
 
+function normalizeSyrveCredentialSet(payload, fallbackCredentialId) {
+  const credentialIdValue = Number(payload?.credentialId ?? fallbackCredentialId);
+  const credentialId = Number.isSafeInteger(credentialIdValue) && credentialIdValue > 0
+    ? credentialIdValue
+    : fallbackCredentialId;
+  const credentials = Array.isArray(payload?.credentials)
+    ? payload.credentials.reduce((result, credential, index) => {
+      const login = typeof credential?.login === 'string' ? credential.login.trim() : '';
+      const password = typeof credential?.password === 'string' ? credential.password : '';
+      const id = typeof credential?.id === 'string' && credential.id.trim()
+        ? credential.id.trim()
+        : `sa-${credentialId}-${index + 1}`;
+
+      if (!login || !password.trim()) {
+        return result;
+      }
+
+      result.push({ id, login, password });
+      return result;
+    }, [])
+    : [];
+
+  if (!credentials.length) {
+    throw new Error('Сервер credentials повернув порожній список учёток.');
+  }
+
+  return {
+    credentialId,
+    credentials
+  };
+}
+
 async function fetchSyrveCredentials() {
   const { userId, extensionKey } = await getProtectedRouteAuthContext();
   const credentialId = normalizeCredentialId(userId);
@@ -1387,16 +1419,7 @@ async function fetchSyrveCredentials() {
     throw new Error(buildCredentialsLookupErrorMessage(response.status, payload));
   }
 
-  const credential = payload?.credential;
-  if (!credential || typeof credential.login !== 'string' || typeof credential.password !== 'string') {
-    throw new Error('Сервер credentials повернув некоректну відповідь.');
-  }
-
-  return {
-    id: credentialId,
-    login: credential.login,
-    password: credential.password
-  };
+  return normalizeSyrveCredentialSet(payload, credentialId);
 }
 
 async function fetchSyrveLicenseCheck({ address, port }) {
@@ -1569,14 +1592,29 @@ async function fetchSyrveLicenseUpdate({ address, port, batchId = null, serialNu
   };
 }
 
-function cacheSyrveCredentialsForTab(tabId, credential) {
+function cacheSyrveCredentialsForTab(tabId, credentialSet) {
   if (tabId === undefined) {
     return;
   }
 
+  const credentials = Array.isArray(credentialSet?.credentials)
+    ? credentialSet.credentials.map((credential) => ({
+      id: credential.id,
+      login: credential.login,
+      password: credential.password
+    }))
+    : [];
+
+  if (!credentials.length) {
+    SYRVE_TAB_CREDENTIALS.delete(tabId);
+    return;
+  }
+
   SYRVE_TAB_CREDENTIALS.set(tabId, {
-    login: credential.login,
-    password: credential.password,
+    credentialId: credentialSet.credentialId ?? null,
+    credentials,
+    currentIndex: 0,
+    exhausted: false,
     expiresAt: Date.now() + SYRVE_CREDENTIAL_TTL_MS
   });
 }
@@ -1592,9 +1630,89 @@ function getSyrveCredentialsForTab(tabId) {
     return null;
   }
 
+  if (cached.exhausted === true) {
+    return null;
+  }
+
+  const credential = cached.credentials[cached.currentIndex];
+  if (!credential) {
+    return null;
+  }
+
   return {
-    login: cached.login,
-    password: cached.password
+    credentialId: cached.credentialId,
+    credential,
+    attemptIndex: cached.currentIndex,
+    total: cached.credentials.length
+  };
+}
+
+function isSyrveCredentialsExhaustedForTab(tabId) {
+  const cached = SYRVE_TAB_CREDENTIALS.get(tabId);
+  if (!cached) {
+    return false;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    SYRVE_TAB_CREDENTIALS.delete(tabId);
+    return false;
+  }
+
+  return cached.exhausted === true;
+}
+
+function advanceSyrveCredentialsForTab(tabId) {
+  const cached = SYRVE_TAB_CREDENTIALS.get(tabId);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    SYRVE_TAB_CREDENTIALS.delete(tabId);
+    return null;
+  }
+
+  const nextIndex = cached.currentIndex + 1;
+  if (nextIndex >= cached.credentials.length) {
+    cached.currentIndex = cached.credentials.length;
+    cached.exhausted = true;
+    return null;
+  }
+
+  cached.currentIndex = nextIndex;
+  cached.expiresAt = Date.now() + SYRVE_CREDENTIAL_TTL_MS;
+  cached.exhausted = false;
+  return getSyrveCredentialsForTab(tabId);
+}
+
+function markSyrveCredentialAttemptSuccess(tabId) {
+  const cached = SYRVE_TAB_CREDENTIALS.get(tabId);
+  if (!cached) {
+    return;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    SYRVE_TAB_CREDENTIALS.delete(tabId);
+    return;
+  }
+
+  cached.exhausted = false;
+  cached.expiresAt = Date.now() + SYRVE_CREDENTIAL_TTL_MS;
+}
+
+function buildSyrveCredentialAttemptResponse(attempt) {
+  return {
+    ok: true,
+    credential: {
+      id: attempt.credential.id,
+      login: attempt.credential.login,
+      password: attempt.credential.password
+    },
+    attempt: {
+      index: attempt.attemptIndex + 1,
+      total: attempt.total,
+      credentialId: attempt.credentialId
+    }
   };
 }
 
@@ -1888,18 +2006,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
-    const credentials = getSyrveCredentialsForTab(tabId);
-    if (!credentials) {
+    const credentialAttempt = getSyrveCredentialsForTab(tabId);
+    if (!credentialAttempt) {
+      if (isSyrveCredentialsExhaustedForTab(tabId)) {
+        sendResponse({ ok: false, exhausted: true, error: 'Усі учётки для цієї вкладки вже вичерпані.' });
+        return false;
+      }
+
       fetchSyrveCredentials()
-        .then((credential) => {
-          cacheSyrveCredentialsForTab(tabId, credential);
-          sendResponse({
-            ok: true,
-            credential: {
-              login: credential.login,
-              password: credential.password
-            }
-          });
+        .then((credentialSet) => {
+          cacheSyrveCredentialsForTab(tabId, credentialSet);
+          const nextAttempt = getSyrveCredentialsForTab(tabId);
+          if (!nextAttempt) {
+            throw new Error('Credentials для цієї вкладки не вдалося підготувати.');
+          }
+
+          sendResponse(buildSyrveCredentialAttemptResponse(nextAttempt));
         })
         .catch((error) => {
           sendResponse({
@@ -1910,7 +2032,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    sendResponse({ ok: true, credential: credentials });
+    sendResponse(buildSyrveCredentialAttemptResponse(credentialAttempt));
+    return false;
+  }
+
+  if (message?.action === 'REPORT_SYRVE_LOGIN_RESULT') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) {
+      sendResponse({ ok: false, error: 'Missing tab id' });
+      return false;
+    }
+
+    if (message.success === true) {
+      markSyrveCredentialAttemptSuccess(tabId);
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    const nextAttempt = advanceSyrveCredentialsForTab(tabId);
+    if (!nextAttempt) {
+      sendResponse({
+        ok: false,
+        exhausted: true,
+        error: 'Усі доступні учётки для Syrve вичерпані.'
+      });
+      return false;
+    }
+
+    sendResponse(buildSyrveCredentialAttemptResponse(nextAttempt));
     return false;
   }
 
@@ -2118,7 +2267,7 @@ function buildSyrvePageUrl({ server, port, path }) {
 }
 
 async function openHealthPeriodTab({ requesterTabId, server, port, requestId }) {
-  const credential = await fetchSyrveCredentials();
+  const credentialSet = await fetchSyrveCredentials();
   const createdTab = await chrome.tabs.create({
     url: buildSyrvePageUrl({
       server,
@@ -2144,7 +2293,7 @@ async function openHealthPeriodTab({ requesterTabId, server, port, requestId }) 
     timeoutId
   });
 
-  cacheSyrveCredentialsForTab(createdTab.id, credential);
+  cacheSyrveCredentialsForTab(createdTab.id, credentialSet);
 
   log.info('Opened health period tab', {
     requesterTabId,
@@ -2158,7 +2307,7 @@ async function openHealthPeriodTab({ requesterTabId, server, port, requestId }) 
 }
 
 async function openSyrvePage({ server, path, port, active = true }) {
-  const credential = await fetchSyrveCredentials();
+  const credentialSet = await fetchSyrveCredentials();
   const createdTab = await chrome.tabs.create({
     url: buildSyrvePageUrl({ server, port, path }),
     active
@@ -2168,7 +2317,7 @@ async function openSyrvePage({ server, path, port, active = true }) {
     throw new Error('Syrve tab was created without an id');
   }
 
-  cacheSyrveCredentialsForTab(createdTab.id, credential);
+  cacheSyrveCredentialsForTab(createdTab.id, credentialSet);
   log.info('Opened Syrve page after credentials preflight', {
     serviceTabId: createdTab.id,
     server,
@@ -2204,7 +2353,7 @@ async function openLoyaltyPage({ login, active = true }) {
 }
 
 async function openCardWebUrlWithSyrveCredentials({ url, active = true }) {
-  const credential = await fetchSyrveCredentials();
+  const credentialSet = await fetchSyrveCredentials();
   const normalizedUrl = normalizeCardWebUrl(url);
   const createdTab = await chrome.tabs.create({
     url: normalizedUrl,
@@ -2215,7 +2364,7 @@ async function openCardWebUrlWithSyrveCredentials({ url, active = true }) {
     throw new Error('Web tab was created without an id');
   }
 
-  cacheSyrveCredentialsForTab(createdTab.id, credential);
+  cacheSyrveCredentialsForTab(createdTab.id, credentialSet);
   log.info('Opened card web URL tab with tab-scoped Syrve credentials', {
     serviceTabId: createdTab.id,
     url: normalizedUrl,

@@ -24,7 +24,7 @@
     "storage"
   ],
   "host_permissions": [
-    "https://slm.daolog.net/*",
+    "https://daologistics.duckdns.org/*",
     "https://hub.daolog.net/*",
     "https://dao.planfix.ua/*",
     "https://planfix-to-syrve.com:8000/*",

@@ -236,28 +236,23 @@ const classifyCardServerHost = (value) => {
     return 'unknown';
 };
 
-const selectPreferredCardServerAddress = (rawAddress) => {
-    const candidates = splitCardServerAddressCandidates(rawAddress)
-        .map((part) => {
-            const endpoint = parseCardServerEndpoint(part);
-            if (!endpoint?.server) {
-                return null;
-            }
+const getCardServerAddressCandidates = (rawAddress) => splitCardServerAddressCandidates(rawAddress)
+    .map((part) => {
+        const endpoint = parseCardServerEndpoint(part);
+        if (!endpoint?.server) {
+            return null;
+        }
 
-            const hostType = classifyCardServerHost(endpoint.server);
-            if (hostType === 'unknown') {
-                return null;
-            }
+        return {
+            raw: part,
+            server: endpoint.server,
+            port: endpoint.port,
+            hostType: classifyCardServerHost(endpoint.server)
+        };
+    })
+    .filter(Boolean);
 
-            return {
-                raw: part,
-                server: endpoint.server,
-                port: endpoint.port,
-                hostType
-            };
-        })
-        .filter(Boolean);
-
+const selectPreferredCardServerCandidate = (candidates) => {
     const publicDomainCandidate = candidates.find((candidate) => candidate.hostType === 'public-domain');
     if (publicDomainCandidate) {
         return publicDomainCandidate;
@@ -273,6 +268,11 @@ const selectPreferredCardServerAddress = (rawAddress) => {
     }
 
     return { errorCode: 'not-found' };
+};
+
+const selectPreferredCardServerAddress = (rawAddress) => {
+    const candidates = getCardServerAddressCandidates(rawAddress);
+    return selectPreferredCardServerCandidate(candidates);
 };
 
 const buildCardServerSelectionErrorMessage = (selectionResult) => {
@@ -731,10 +731,15 @@ const buildCardPortRequiredErrorMessage = (server) => (
 );
 
 const resolveCardServerContextFromRawInput = (rawServer, port) => {
-    const selection = selectPreferredCardServerAddress(rawServer);
+    const candidates = getCardServerAddressCandidates(rawServer);
+    const availabilityPlan = buildCardServerAvailabilityPlan(candidates, port);
+    const selection = selectPreferredCardServerCandidate(candidates);
     if (!selection?.server) {
         return {
             context: null,
+            candidates,
+            availabilityPlan,
+            selection,
             errorMessage: buildCardServerSelectionErrorMessage(selection)
         };
     }
@@ -743,6 +748,9 @@ const resolveCardServerContextFromRawInput = (rawServer, port) => {
     if (!context?.server) {
         return {
             context: null,
+            candidates,
+            availabilityPlan,
+            selection,
             errorMessage: 'Адресу сервера не знайдено. Перевірте поле адреси.'
         };
     }
@@ -750,13 +758,19 @@ const resolveCardServerContextFromRawInput = (rawServer, port) => {
     if (requiresCardExplicitPort(context.server) && !context.port) {
         return {
             context: null,
+            candidates,
+            availabilityPlan,
+            selection,
             errorMessage: buildCardPortRequiredErrorMessage(context.server)
         };
     }
 
     return {
         context,
-        selection
+        candidates,
+        availabilityPlan,
+        selection,
+        errorMessage: ''
     };
 };
 
@@ -779,25 +793,87 @@ const getCardServerAvailabilityUrl = (context) => {
     return buildCardServerUrl(context, '/resto/');
 };
 
+const serializeCardServerAddressCandidate = (candidate) => {
+    const normalizedServer = normalizeServerHost(candidate?.server || candidate);
+    if (!normalizedServer) {
+        return '';
+    }
+
+    const normalizedPort = String(candidate?.port || '').trim();
+    const hostType = String(candidate?.hostType || classifyCardServerHost(normalizedServer)).trim() || 'unknown';
+    return `${normalizedServer}:${normalizedPort}:${hostType}`;
+};
+
+const getCardServerAvailabilityCacheKey = (candidates, port) => {
+    const serializedCandidates = candidates
+        .map((candidate) => serializeCardServerAddressCandidate(candidate))
+        .filter(Boolean);
+
+    if (!serializedCandidates.length) {
+        return '';
+    }
+
+    const normalizedPort = String(port || '').trim();
+    return `${normalizedPort}|${serializedCandidates.join('|')}`;
+};
+
+const buildCardServerAvailabilityPlan = (candidates, port) => {
+    const probeCandidates = candidates
+        .filter((candidate) => candidate.hostType === 'public-domain' || candidate.hostType === 'public-ipv4')
+        .slice(0, 2)
+        .map((candidate) => {
+            const context = resolveCardServerContext(candidate, port);
+            const hasRequiredPort = Boolean(context?.server) && (!requiresCardExplicitPort(context.server) || context.port);
+
+            return {
+                raw: candidate.raw,
+                server: candidate.server,
+                port: candidate.port,
+                hostType: candidate.hostType,
+                context: hasRequiredPort ? context : null,
+                url: hasRequiredPort ? getCardServerAvailabilityUrl(context) : '',
+                errorMessage: hasRequiredPort ? '' : buildCardPortRequiredErrorMessage(candidate.server)
+            };
+        });
+
+    const availableProbeCandidates = probeCandidates.filter((candidate) => candidate.context?.server && candidate.url);
+    const portErrorCandidate = probeCandidates.find((candidate) => candidate.errorMessage);
+
+    return {
+        key: getCardServerAvailabilityCacheKey(candidates, port),
+        candidates: availableProbeCandidates,
+        errorMessage: availableProbeCandidates.length
+            ? ''
+            : portErrorCandidate?.errorMessage || buildCardServerSelectionErrorMessage(selectPreferredCardServerCandidate(candidates))
+    };
+};
+
 const isCardApiAutologinSupportedHost = (server) => {
     const normalizedServer = normalizeServerHost(server);
     return normalizedServer === 'syrve.app' || normalizedServer.endsWith(CARD_API_SUPPORTED_HOST_SUFFIX);
 };
 
-const getCardServerAvailabilityCacheKey = (context) => getCardServerAvailabilityUrl(context);
-
-const applyRecentCardServerAvailabilitySnapshot = (cacheKey, field72ValueElement) => {
+const getFreshCardServerAvailabilitySnapshot = (cacheKey) => {
     if (!cacheKey || !cardServerAvailabilitySnapshot || cardServerAvailabilitySnapshot.key !== cacheKey) {
-        return false;
+        return null;
     }
 
     if (Date.now() - cardServerAvailabilitySnapshot.checkedAt >= CARD_SERVER_AVAILABILITY_RECHECK_INTERVAL_MS) {
+        return null;
+    }
+
+    return cardServerAvailabilitySnapshot;
+};
+
+const applyRecentCardServerAvailabilitySnapshot = (cacheKey, field72ValueElement) => {
+    const snapshot = getFreshCardServerAvailabilitySnapshot(cacheKey);
+    if (!snapshot) {
         return false;
     }
 
     setCardServerAvailabilityState(
-        cardServerAvailabilitySnapshot.state,
-        cardServerAvailabilitySnapshot.message,
+        snapshot.state,
+        snapshot.message,
         field72ValueElement
     );
     return true;
@@ -959,74 +1035,188 @@ const wait = (delay) => new Promise((resolve) => {
     setTimeout(resolve, delay);
 });
 
-const probeCardServerAvailability = async (context, field72ValueElement, requestToken) => {
-    const url = getCardServerAvailabilityUrl(context);
-    const cacheKey = getCardServerAvailabilityCacheKey(context);
-    if (!url) {
+const buildCardServerAvailabilityAttemptLabel = (candidate) => {
+    if (!candidate) {
+        return '';
+    }
+
+    const context = candidate.context || candidate;
+    return candidate.url || getCardServerAvailabilityUrl(context) || buildCardServerContextKey(context);
+};
+
+const buildCardServerAvailabilityCheckingMessage = (probeCandidates, attemptIndex = 0) => {
+    const candidate = probeCandidates[attemptIndex];
+    const candidateLabel = buildCardServerAvailabilityAttemptLabel(candidate);
+    if (!candidateLabel) {
+        return 'Перевірка доступності сервера';
+    }
+
+    if (probeCandidates.length > 1) {
+        return `Перевірка ${candidateLabel} (${attemptIndex + 1}/${probeCandidates.length})`;
+    }
+
+    return `Перевірка ${candidateLabel}`;
+};
+
+const buildCardServerAvailabilityAttemptRecord = (candidate, state, message = '') => ({
+    server: normalizeServerHost(candidate?.context?.server || candidate?.server || ''),
+    port: String(candidate?.context?.port || candidate?.port || '').trim(),
+    hostType: candidate?.hostType || classifyCardServerHost(candidate?.context?.server || candidate?.server || ''),
+    url: buildCardServerAvailabilityAttemptLabel(candidate),
+    state,
+    message: String(message || '').trim()
+});
+
+const buildCardServerAvailabilitySummaryMessage = (attemptedCandidates, winningCandidate = null) => {
+    const attemptedSummary = attemptedCandidates
+        .map((candidate) => {
+            const candidateLabel = candidate.url || buildCardServerContextKey(candidate) || candidate.server;
+            const stateLabel = candidate.state === 'online'
+                ? 'доступний'
+                : candidate.state === 'service-offline'
+                    ? 'сервіс перевірки недоступний'
+                    : 'недоступний';
+            return `${candidateLabel} — ${stateLabel}`;
+        })
+        .filter(Boolean)
+        .join('; ');
+
+    if (winningCandidate) {
+        const winnerLabel = winningCandidate.url || buildCardServerContextKey(winningCandidate) || winningCandidate.server;
+        return attemptedSummary
+            ? `Доступний: ${winnerLabel}. Перевірено: ${attemptedSummary}.`
+            : `Доступний: ${winnerLabel}.`;
+    }
+
+    const lastAttempt = attemptedCandidates[attemptedCandidates.length - 1] || null;
+    if (!attemptedSummary) {
+        return lastAttempt?.message || 'Не вдалося перевірити доступність сервера.';
+    }
+
+    return lastAttempt?.message
+        ? `Перевірено: ${attemptedSummary}. Остання помилка: ${lastAttempt.message}`
+        : `Перевірено: ${attemptedSummary}.`;
+};
+
+const probeCardServerAvailability = async (availabilityPlan, field72ValueElement, requestToken) => {
+    const cacheKey = availabilityPlan?.key || '';
+    const probeCandidates = availabilityPlan?.candidates || [];
+    if (!cacheKey || !probeCandidates.length) {
         setCardServerAvailabilityState('idle', '', field72ValueElement);
         return false;
     }
 
     cardServerAvailabilityInFlightKey = cacheKey;
-    setCardServerAvailabilityState('checking', `Перевірка ${url}`, field72ValueElement);
+    console.debug('[DAO][server-availability] Перевіряю кандидати:', probeCandidates.map((candidate) => buildCardServerAvailabilityAttemptLabel(candidate)));
 
     try {
-        const response = await new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage({
-                action: 'PROBE_SERVER_AVAILABILITY',
-                server: context.server,
-                port: context.port
-            }, (result) => {
-                if (chrome.runtime.lastError) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                    return;
+        const attemptedCandidates = [];
+
+        for (let index = 0; index < probeCandidates.length; index += 1) {
+            const candidate = probeCandidates[index];
+            const targetNode = resolveCardServerAvailabilityTarget(field72ValueElement);
+            const candidateLabel = buildCardServerAvailabilityAttemptLabel(candidate);
+            setCardServerAvailabilityState(
+                'checking',
+                buildCardServerAvailabilityCheckingMessage(probeCandidates, index),
+                targetNode
+            );
+
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({
+                        action: 'PROBE_SERVER_AVAILABILITY',
+                        server: candidate.context.server,
+                        port: candidate.context.port
+                    }, (result) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                            return;
+                        }
+
+                        resolve(result);
+                    });
+                });
+
+                if (requestToken !== cardServerAvailabilityCheckToken) {
+                    return false;
                 }
 
-                resolve(result);
-            });
-        });
+                if (!response?.ok) {
+                    throw new Error(response?.error || `Не вдалося перевірити ${candidateLabel}.`);
+                }
+
+                const isReachable = response.reachable === true;
+                const attemptMessage = String(response.error || `${candidateLabel} відповідає зі статусом ${response.status}.`).trim();
+                const attemptRecord = buildCardServerAvailabilityAttemptRecord(
+                    candidate,
+                    isReachable ? 'online' : 'offline',
+                    attemptMessage
+                );
+
+                attemptedCandidates.push(attemptRecord);
+                if (!isReachable) {
+                    continue;
+                }
+
+                const nextMessage = buildCardServerAvailabilitySummaryMessage(attemptedCandidates, attemptRecord);
+                cardServerAvailabilitySnapshot = {
+                    key: cacheKey,
+                    checkedAt: Date.now(),
+                    state: 'online',
+                    message: nextMessage,
+                    winningCandidate: {
+                        server: attemptRecord.server,
+                        port: attemptRecord.port,
+                        hostType: attemptRecord.hostType,
+                        url: attemptRecord.url
+                    },
+                    attemptedCandidates
+                };
+                setCardServerAvailabilityState(
+                    'online',
+                    nextMessage,
+                    resolveCardServerAvailabilityTarget(field72ValueElement)
+                );
+                console.debug('[DAO][server-availability] Знайдено онлайн-кандидат:', attemptRecord.url);
+                return true;
+            } catch (error) {
+                if (requestToken !== cardServerAvailabilityCheckToken) {
+                    return false;
+                }
+
+                const attemptMessage = error?.message || `Не вдалося підключитися до ${candidateLabel}.`;
+                const attemptState = resolveCardServerAvailabilityFailureState(attemptMessage);
+                attemptedCandidates.push(buildCardServerAvailabilityAttemptRecord(candidate, attemptState, attemptMessage));
+
+                if (attemptState === 'service-offline') {
+                    break;
+                }
+            }
+        }
 
         if (requestToken !== cardServerAvailabilityCheckToken) {
             return false;
         }
 
-        if (!response?.ok) {
-            throw new Error(response?.error || `Не вдалося перевірити ${url}.`);
-        }
-
-        const isReachable = response.reachable === true;
-        const nextState = isReachable ? 'online' : 'offline';
-        const nextMessage = response.error || `${url} відповідає зі статусом ${response.status}.`;
+        const nextState = attemptedCandidates.some((candidate) => candidate.state === 'service-offline')
+            ? 'service-offline'
+            : 'offline';
+        const nextMessage = buildCardServerAvailabilitySummaryMessage(attemptedCandidates);
         cardServerAvailabilitySnapshot = {
             key: cacheKey,
             checkedAt: Date.now(),
             state: nextState,
-            message: nextMessage
+            message: nextMessage,
+            winningCandidate: null,
+            attemptedCandidates
         };
         setCardServerAvailabilityState(
             nextState,
             nextMessage,
             resolveCardServerAvailabilityTarget(field72ValueElement)
         );
-        return isReachable;
-    } catch (error) {
-        if (requestToken !== cardServerAvailabilityCheckToken) {
-            return false;
-        }
-
-        const nextMessage = error?.message || `Не вдалося підключитися до ${url}.`;
-        const nextState = resolveCardServerAvailabilityFailureState(nextMessage);
-        cardServerAvailabilitySnapshot = {
-            key: cacheKey,
-            checkedAt: Date.now(),
-            state: nextState,
-            message: nextMessage
-        };
-        setCardServerAvailabilityState(
-            nextState,
-            nextMessage,
-            resolveCardServerAvailabilityTarget(field72ValueElement)
-        );
+        console.debug('[DAO][server-availability] Онлайн-кандидат не знайдено:', attemptedCandidates.map((candidate) => `${candidate.url || candidate.server}=${candidate.state}`));
         return false;
     } finally {
         if (cardServerAvailabilityInFlightKey === cacheKey) {
@@ -1035,19 +1225,14 @@ const probeCardServerAvailability = async (context, field72ValueElement, request
     }
 };
 
-const scheduleCardServerAvailabilityCheck = (context, field72ValueElement) => {
+const scheduleCardServerAvailabilityCheck = (availabilityPlan, field72ValueElement) => {
     if (!field72ValueElement) {
         return;
     }
 
-    if (!context?.server) {
-        invalidateCardServerAvailabilityCheck();
-        setCardServerAvailabilityState('idle', '', field72ValueElement);
-        return;
-    }
-
-    const cacheKey = getCardServerAvailabilityCacheKey(context);
-    if (!cacheKey) {
+    const cacheKey = availabilityPlan?.key || '';
+    const probeCandidates = availabilityPlan?.candidates || [];
+    if (!cacheKey || !probeCandidates.length) {
         invalidateCardServerAvailabilityCheck();
         setCardServerAvailabilityState('idle', '', field72ValueElement);
         return;
@@ -1058,12 +1243,12 @@ const scheduleCardServerAvailabilityCheck = (context, field72ValueElement) => {
     }
 
     if (cardServerAvailabilityInFlightKey === cacheKey) {
-        setCardServerAvailabilityState('checking', `Перевірка ${cacheKey}`, field72ValueElement);
+        setCardServerAvailabilityState('checking', buildCardServerAvailabilityCheckingMessage(probeCandidates), field72ValueElement);
         return;
     }
 
     if (cardServerAvailabilityScheduledKey === cacheKey && cardServerAvailabilityCheckTimerId) {
-        setCardServerAvailabilityState('checking', `Перевірка ${cacheKey}`, field72ValueElement);
+        setCardServerAvailabilityState('checking', buildCardServerAvailabilityCheckingMessage(probeCandidates), field72ValueElement);
         return;
     }
 
@@ -1079,7 +1264,7 @@ const scheduleCardServerAvailabilityCheck = (context, field72ValueElement) => {
             return;
         }
 
-        await probeCardServerAvailability(context, field72ValueElement, requestToken);
+        await probeCardServerAvailability(availabilityPlan, field72ValueElement, requestToken);
     }, CARD_SERVER_AVAILABILITY_CHECK_DEBOUNCE_MS);
 };
 
@@ -5342,6 +5527,35 @@ const pollCardServerError = async (context, options = {}) => {
         return serverResolution.context;
     };
 
+    const resolvePreferredCardOpenServerContext = (serverResolution) => {
+        const cacheKey = serverResolution?.availabilityPlan?.key || '';
+        const snapshot = getFreshCardServerAvailabilitySnapshot(cacheKey);
+        const winningCandidate = snapshot?.winningCandidate || null;
+
+        if (winningCandidate?.server) {
+            const winningContext = resolveCardServerContext(winningCandidate, winningCandidate.port);
+            if (winningContext?.server) {
+                return winningContext;
+            }
+        }
+
+        return serverResolution?.context || null;
+    };
+
+    const getPreferredOpenServerData = (scopeRoot = document, showAlert = true) => {
+        const serverResolution = getCardServerResolution(scopeRoot);
+        const preferredContext = resolvePreferredCardOpenServerContext(serverResolution);
+
+        if (!preferredContext) {
+            if (showAlert) {
+                alert(serverResolution.errorMessage || 'Адресу сервера не знайдено. Перевірте поле адреси.');
+            }
+            return null;
+        }
+
+        return preferredContext;
+    };
+
     const createLicenseBtn = (label, color, scopeRoot) => {
         const btn = document.createElement('button');
         btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.license;
@@ -5542,7 +5756,7 @@ const pollCardServerError = async (context, options = {}) => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', async () => {
-            const serverData = getServerData(scopeRoot, true);
+            const serverData = getPreferredOpenServerData(scopeRoot, true);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -5590,7 +5804,7 @@ const pollCardServerError = async (context, options = {}) => {
         btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
         btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', async () => {
-            const serverData = getServerData(scopeRoot, true);
+            const serverData = getPreferredOpenServerData(scopeRoot, true);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -6037,11 +6251,13 @@ const pollCardServerError = async (context, options = {}) => {
         ensureCardPeriodNode();
         ensureCardErrorNode();
 
-        const serverData = getServerData(scopeRoot, false);
+        const serverResolution = getCardServerResolution(scopeRoot);
+        const serverData = serverResolution.context;
+        if (serverValueElement) {
+            scheduleCardServerAvailabilityCheck(serverResolution.availabilityPlan, serverValueElement);
+        }
+
         if (serverData) {
-            if (serverValueElement) {
-                scheduleCardServerAvailabilityCheck(serverData, serverValueElement);
-            }
             pollCardServerError(serverData).catch((error) => {
                 console.error('Не вдалося оновити помилку при ініціалізації картки:', error);
             });
@@ -6049,9 +6265,6 @@ const pollCardServerError = async (context, options = {}) => {
             clearCardPeriodMessage();
             clearCardErrorMessage();
             clearCardVersionStatus(scopeRoot);
-            if (serverValueElement) {
-                setCardServerAvailabilityState('idle', '', serverValueElement);
-            }
         }
     };
 

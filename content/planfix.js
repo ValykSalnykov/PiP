@@ -428,6 +428,14 @@ const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const WEB_BUTTON_ID = 'open-server-web-url-button';
 const API_BUTTON_ID = 'open-server-api-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
+const CARD_BUTTON_TOOLTIP_ATTR = 'data-card-button-tooltip';
+const CARD_BUTTON_ACTION_DISABLED_ATTR = 'data-card-button-action-disabled';
+const CARD_BUTTON_DISABLED_MESSAGES = Object.freeze({
+    loyaltyMissing: 'Нема логіну Loyalty',
+    webMissing: 'Нема адреси вебу',
+    webInvalid: 'Некоректна адреса вебу',
+    apiUnsupported: 'Адреса вебу не підходить для Веб:API'
+});
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_LICENSE_DISPLAY_MODE_STORAGE_KEY = 'planfixLicenseDisplayMode';
@@ -1610,17 +1618,65 @@ const getCardButtonIntentTheme = (intent) => {
     return preset.intents[intent] || preset.intents[CARD_BUTTON_INTENTS.default];
 };
 
+const isCardActionButtonActionDisabled = (button) => (
+    button instanceof HTMLButtonElement
+    && button.getAttribute(CARD_BUTTON_ACTION_DISABLED_ATTR) === 'true'
+);
+
+const canUseCardActionButtonHover = (button) => (
+    button instanceof HTMLButtonElement
+    && !button.disabled
+    && !isCardActionButtonActionDisabled(button)
+);
+
+const syncCardActionButtonInteractivity = (button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    if (button.disabled) {
+        button.style.cursor = 'wait';
+        button.style.opacity = '0.82';
+        button.style.filter = '';
+        return;
+    }
+
+    const actionDisabled = isCardActionButtonActionDisabled(button);
+    button.style.cursor = actionDisabled ? 'not-allowed' : 'pointer';
+    button.style.opacity = actionDisabled ? '0.6' : '1';
+    button.style.filter = actionDisabled ? 'saturate(0.16)' : '';
+};
+
 const applyCardActionButtonTheme = (button) => {
     if (!(button instanceof HTMLButtonElement)) {
         return;
     }
 
     const theme = getCardButtonIntentTheme(button.dataset.cardButtonIntent || CARD_BUTTON_INTENTS.default);
-    button.style.background = theme.background;
-    button.style.color = theme.color;
-    button.style.border = theme.border;
-    button.style.boxShadow = theme.boxShadow;
+    const isActionDisabled = isCardActionButtonActionDisabled(button);
+
+    if (isActionDisabled) {
+        button.style.background = isPlanfixDarkTheme()
+            ? 'rgba(51, 65, 85, 0.82)'
+            : 'rgba(226, 232, 240, 0.96)';
+        button.style.color = isPlanfixDarkTheme()
+            ? 'rgba(226, 232, 240, 0.78)'
+            : '#64748b';
+        button.style.border = isPlanfixDarkTheme()
+            ? '1px solid rgba(148, 163, 184, 0.22)'
+            : '1px solid rgba(148, 163, 184, 0.32)';
+        button.style.boxShadow = isPlanfixDarkTheme()
+            ? 'inset 0 1px 0 rgba(255, 255, 255, 0.04)'
+            : 'inset 0 1px 0 rgba(255, 255, 255, 0.7)';
+    } else {
+        button.style.background = theme.background;
+        button.style.color = theme.color;
+        button.style.border = theme.border;
+        button.style.boxShadow = theme.boxShadow;
+    }
+
     button.style.textShadow = '';
+    syncCardActionButtonInteractivity(button);
 };
 
 const applyCardLoginButtonTheme = (button) => {
@@ -1693,9 +1749,8 @@ const setCardActionButtonLoading = (button, isLoading, loadingLabel = '') => {
     }
 
     button.disabled = isLoading;
-    button.style.cursor = isLoading ? 'wait' : 'pointer';
-    button.style.opacity = isLoading ? '0.82' : '1';
     button.textContent = isLoading && loadingLabel ? loadingLabel : button.dataset.defaultLabel;
+    syncCardActionButtonInteractivity(button);
 };
 
 const applyCompactCardActionButtonStyle = (button) => {
@@ -1710,6 +1765,7 @@ const applyCompactCardActionButtonStyle = (button) => {
     button.style.transition = 'opacity 0.2s ease, transform 0.18s ease, background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease';
 
     applyCardActionButtonTheme(button);
+    syncCardActionButtonInteractivity(button);
 };
 
 const resetActiveHelpDeskDraftButton = () => {
@@ -5564,6 +5620,106 @@ const readSendDataResponseMessage = async (response) => {
     const getCardWebUrl = (scopeRoot = document) => getCardFieldTextByLabel(scopeRoot, CARD_WEB_FIELD_LABEL)
         || getCardFieldText(scopeRoot, CARD_WEB_FIELD_ID);
 
+    const buildCardActionButtonAvailability = (scopeRoot = document) => {
+        const loyaltyLogin = String(getCardLoyaltyLogin(scopeRoot) || '').trim();
+        const rawWebUrl = String(getCardWebUrl(scopeRoot) || '').trim();
+        const hasWebValue = rawWebUrl.length > 0 && !/^[\-–—]+$/.test(rawWebUrl);
+
+        const availability = {
+            [LOYALTY_BUTTON_ID]: {
+                actionDisabled: !loyaltyLogin,
+                tooltip: loyaltyLogin ? '' : CARD_BUTTON_DISABLED_MESSAGES.loyaltyMissing
+            },
+            [WEB_BUTTON_ID]: {
+                actionDisabled: false,
+                tooltip: ''
+            },
+            [API_BUTTON_ID]: {
+                actionDisabled: false,
+                tooltip: ''
+            }
+        };
+
+        if (!hasWebValue) {
+            availability[WEB_BUTTON_ID] = {
+                actionDisabled: true,
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webMissing
+            };
+            availability[API_BUTTON_ID] = {
+                actionDisabled: true,
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webMissing
+            };
+            return availability;
+        }
+
+        let normalizedWebUrl = '';
+        try {
+            normalizedWebUrl = normalizeCardWebUrl(rawWebUrl);
+        } catch (error) {
+            availability[WEB_BUTTON_ID] = {
+                actionDisabled: true,
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webInvalid
+            };
+            availability[API_BUTTON_ID] = {
+                actionDisabled: true,
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webInvalid
+            };
+            return availability;
+        }
+
+        try {
+            buildCardApiUrl(normalizedWebUrl);
+        } catch (error) {
+            availability[API_BUTTON_ID] = {
+                actionDisabled: true,
+                tooltip: error?.message?.includes('syrve.app')
+                    ? CARD_BUTTON_DISABLED_MESSAGES.apiUnsupported
+                    : CARD_BUTTON_DISABLED_MESSAGES.webInvalid
+            };
+        }
+
+        return availability;
+    };
+
+    const setCardActionButtonAvailability = (button, nextState = {}) => {
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        const actionDisabled = nextState?.actionDisabled === true;
+        const tooltip = String(nextState?.tooltip || '').trim();
+
+        button.setAttribute(CARD_BUTTON_ACTION_DISABLED_ATTR, actionDisabled ? 'true' : 'false');
+        button.setAttribute('aria-disabled', actionDisabled ? 'true' : 'false');
+
+        if (tooltip) {
+            button.setAttribute(CARD_BUTTON_TOOLTIP_ATTR, tooltip);
+            button.title = tooltip;
+        } else {
+            button.removeAttribute(CARD_BUTTON_TOOLTIP_ATTR);
+            button.removeAttribute('title');
+        }
+
+        applyCardActionButtonTheme(button);
+    };
+
+    const syncCardActionButtonsAvailability = (container, scopeRoot = document) => {
+        if (!(container instanceof HTMLElement)) {
+            return;
+        }
+
+        const availability = buildCardActionButtonAvailability(scopeRoot);
+
+        [LOYALTY_BUTTON_ID, WEB_BUTTON_ID, API_BUTTON_ID].forEach((buttonId) => {
+            const button = container.querySelector(`#${buttonId}`);
+            if (!(button instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            setCardActionButtonAvailability(button, availability[buttonId]);
+        });
+    };
+
     const normalizeCardWebUrl = (value) => {
         const normalizedValue = String(value || '').trim();
         if (!normalizedValue || /^[\-–—]+$/.test(normalizedValue)) {
@@ -5925,16 +6081,18 @@ const readSendDataResponseMessage = async (response) => {
             white-space: nowrap;
         `;
         btn.addEventListener('mouseenter', () => {
-            if (!btn.disabled) {
+            if (canUseCardActionButtonHover(btn)) {
                 btn.style.opacity = '0.82';
             }
         });
         btn.addEventListener('mouseleave', () => {
-            if (!btn.disabled) {
-                btn.style.opacity = '1';
-            }
+            syncCardActionButtonInteractivity(btn);
         });
         btn.addEventListener('click', async () => {
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
             const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
             const loyaltyLogin = getCardLoyaltyLogin(currentScopeRoot);
 
@@ -5983,16 +6141,18 @@ const readSendDataResponseMessage = async (response) => {
         `;
 
         btn.addEventListener('mouseenter', () => {
-            if (!btn.disabled) {
+            if (canUseCardActionButtonHover(btn)) {
                 btn.style.opacity = '0.82';
             }
         });
         btn.addEventListener('mouseleave', () => {
-            if (!btn.disabled) {
-                btn.style.opacity = '1';
-            }
+            syncCardActionButtonInteractivity(btn);
         });
         btn.addEventListener('click', async () => {
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
             const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
             let webUrl;
 
@@ -6045,16 +6205,18 @@ const readSendDataResponseMessage = async (response) => {
         `;
 
         btn.addEventListener('mouseenter', () => {
-            if (!btn.disabled) {
+            if (canUseCardActionButtonHover(btn)) {
                 btn.style.opacity = '0.82';
             }
         });
         btn.addEventListener('mouseleave', () => {
-            if (!btn.disabled) {
-                btn.style.opacity = '1';
-            }
+            syncCardActionButtonInteractivity(btn);
         });
         btn.addEventListener('click', async () => {
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
             const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
             let apiUrl;
 
@@ -6214,7 +6376,8 @@ const readSendDataResponseMessage = async (response) => {
     const injectPanelButtons = (serverFieldTarget) => {
         if (!serverFieldTarget) return;
 
-        const scopeRoot = getCardScopeRoot(serverFieldTarget);
+        const scopeRoot = serverFieldTarget.closest('.g-popup-win-scroll-content, .page-layout-block.handbook-card-container, .object-edit-win-target, .object-edit-win-location-field')
+            || document;
 
         const wrapperBox = serverFieldTarget.querySelector('.object-edit-field-bottom-panel-rc__wrapper-box');
         if (!wrapperBox) return;
@@ -6254,46 +6417,36 @@ const readSendDataResponseMessage = async (response) => {
         `;
 
         const existingLoyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
-        const periodButton = container.querySelector('#get-period-button');
         if (!existingLoyaltyButton) {
-            const loyaltyButton = createLoyaltyBtn(scopeRoot);
-            if (periodButton) {
-                periodButton.after(loyaltyButton);
+            const periodBtn = container.querySelector('#get-period-button');
+            const loyaltyBtn = createLoyaltyBtn(scopeRoot);
+            if (periodBtn?.nextSibling) {
+                container.insertBefore(loyaltyBtn, periodBtn.nextSibling);
             } else {
-                container.appendChild(loyaltyButton);
+                container.appendChild(loyaltyBtn);
             }
-        } else if (periodButton && periodButton.nextElementSibling !== existingLoyaltyButton) {
-            periodButton.after(existingLoyaltyButton);
         }
-
-        container.querySelectorAll('[data-card-web-action-group="true"]').forEach((groupNode) => groupNode.remove());
 
         const existingWebButton = container.querySelector(`#${WEB_BUTTON_ID}`);
         const existingApiButton = container.querySelector(`#${API_BUTTON_ID}`);
-        const loyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
         if (!existingWebButton) {
-            const webButton = createWebBtn(scopeRoot);
-            if (loyaltyButton) {
-                loyaltyButton.after(webButton);
+            const loyaltyBtn = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
+            const webBtn = createWebBtn(scopeRoot);
+            if (loyaltyBtn?.nextSibling) {
+                container.insertBefore(webBtn, loyaltyBtn.nextSibling);
             } else {
-                container.appendChild(webButton);
+                container.appendChild(webBtn);
             }
-        } else if (loyaltyButton && loyaltyButton.nextElementSibling !== existingWebButton) {
-            loyaltyButton.after(existingWebButton);
         }
 
-        const webButton = container.querySelector(`#${WEB_BUTTON_ID}`);
         if (!existingApiButton) {
-            const apiButton = createApiBtn(scopeRoot);
-            if (webButton) {
-                webButton.after(apiButton);
-            } else if (loyaltyButton) {
-                loyaltyButton.after(apiButton);
+            const webBtn = container.querySelector(`#${WEB_BUTTON_ID}`);
+            const apiBtn = createApiBtn(scopeRoot);
+            if (webBtn?.nextSibling) {
+                container.insertBefore(apiBtn, webBtn.nextSibling);
             } else {
-                container.appendChild(apiButton);
+                container.appendChild(apiBtn);
             }
-        } else if (webButton && webButton.nextElementSibling !== existingApiButton) {
-            webButton.after(existingApiButton);
         }
 
         const existingHelpDeskButton = container.querySelector(`#${HELPDESK_DRAFT_BUTTON_ID}`);
@@ -6312,6 +6465,7 @@ const readSendDataResponseMessage = async (response) => {
         container.querySelectorAll('button').forEach((button) => {
             applyCompactCardActionButtonStyle(button);
         });
+        syncCardActionButtonsAvailability(container, scopeRoot);
 
         ensureCardPeriodNode();
         ensureCardErrorNode();

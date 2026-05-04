@@ -686,6 +686,13 @@
       text-align: left;
     }
 
+    .setting-row__trigger:disabled,
+    .setting-row__trigger:disabled:hover {
+      cursor: not-allowed;
+      opacity: 0.58;
+      color: var(--text-muted);
+    }
+
     .setting-row__trigger:hover,
     .collapsible-card__summary:hover {
       color: #4f5778;
@@ -989,10 +996,10 @@
         </div>
 
         <div class="fields-inline">
-          <label class="sr-only" for="serverField">Адрес сервера</label>
+          <label class="sr-only" for="serverField">Адреса серверу</label>
           <div class="input-shell">
             <svg class="input-shell__icon" aria-hidden="true"><use href="#i-server"></use></svg>
-            <input type="text" id="serverField" placeholder="Адрес сервера" autocomplete="off">
+            <input type="text" id="serverField" placeholder="Адреса серверу" autocomplete="off">
           </div>
 
           <label class="sr-only" for="portField">Номер порта</label>

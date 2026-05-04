@@ -426,13 +426,8 @@ const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_VERSION_STATUS_ATTR = 'data-dao-version-status';
 const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const WEB_BUTTON_ID = 'open-server-web-url-button';
-const WEB_BUTTON_GROUP_ID = 'open-server-web-url-group';
 const API_BUTTON_ID = 'open-server-api-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
-const CARD_WEB_API_BUTTON_OVERLAP_PX = 12;
-const CARD_WEB_API_BUTTON_EXPANDED_SHIFT_PX = 6;
-const CARD_WEB_API_BUTTON_COLLAPSED_SHIFT_PX = -14;
-const CARD_WEB_API_BUTTON_CLEARANCE_PX = 8;
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
 const CARD_LICENSE_DISPLAY_MODE_STORAGE_KEY = 'planfixLicenseDisplayMode';
@@ -454,9 +449,9 @@ const CARD_LICENSE_MODAL_SCALE_STEPS = [50, 60, 70, 80, 90, 100, 110, 120, 130];
 const CARD_LICENSE_MODAL_SCALE_DEFAULT = 100;
 const CARD_SERVER_AVAILABILITY_ATTR = 'data-dao-server-availability';
 const CARD_SERVER_AVAILABILITY_SERVICE_OFFLINE_ICON = 'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 10%27%3E%3Cpath d=%27M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8%27 stroke=%27%23ffffff%27 stroke-width=%271.8%27 stroke-linecap=%27round%27/%3E%3C/svg%3E")';
-const CARD_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
 const CARD_LOGIN_LONG_WAIT_MS = 7000;
 const CARD_LOGIN_SUCCESS_RESET_MS = 1400;
+const CARD_LOGIN_SUCCESS_MESSAGE_DELAY_MS = 220;
 const CARD_SERVER_AVAILABILITY_CHECK_DEBOUNCE_MS = 450;
 const CARD_SERVER_AVAILABILITY_RECHECK_INTERVAL_MS = 60 * 1000;
 const CARD_LICENSE_GROUP_ORDER = ['pos', 'api', 'mobile', 'other'];
@@ -467,6 +462,7 @@ const CARD_LOGIN_BUTTON_LABELS = [
     'Готово',
     'Довге очікування'
 ];
+const SEND_DATA_SUCCESS_MESSAGE = 'Користувач вже має обліковку, все гуд';
 const PLANFIX_DARK_THEME_CLASS = 'dark-theme';
 const CARD_API_PATH = '/integration-management/index.html#/integrations';
 const CARD_API_SUPPORTED_HOST_SUFFIX = '.syrve.app';
@@ -2557,6 +2553,171 @@ const ensureCardLicenseModalStyles = () => {
             justify-content: flex-end;
         }
 
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1.9fr) minmax(210px, 1fr) minmax(160px, 0.9fr);
+            gap: 12px;
+            align-items: center;
+            padding: 0 6px 2px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-header-cell,
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-cell-label {
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 800;
+            line-height: 1.2;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-cell-label {
+            display: none;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row {
+            --dao-queue-accent: #d97706;
+            --dao-queue-soft: rgba(217, 119, 6, 0.12);
+            --dao-queue-border: rgba(217, 119, 6, 0.18);
+            --dao-queue-shadow: rgba(148, 163, 184, 0.14);
+            position: relative;
+            overflow: hidden;
+            display: grid;
+            grid-template-columns: minmax(0, 1.9fr) minmax(210px, 1fr) minmax(160px, 0.9fr);
+            gap: 12px;
+            align-items: stretch;
+            padding: 12px;
+            border-radius: 18px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
+            box-shadow: 0 14px 28px var(--dao-queue-shadow);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row::before {
+            content: '';
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: linear-gradient(180deg, var(--dao-queue-accent), color-mix(in srgb, var(--dao-queue-accent) 40%, #ffffff));
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row:hover {
+            transform: translateY(-1px);
+            border-color: var(--dao-queue-border);
+            box-shadow: 0 18px 34px rgba(148, 163, 184, 0.18);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row--success {
+            --dao-queue-accent: #4f7f2a;
+            --dao-queue-soft: rgba(98, 158, 53, 0.12);
+            --dao-queue-border: rgba(98, 158, 53, 0.2);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row--warning {
+            --dao-queue-accent: #c97316;
+            --dao-queue-soft: rgba(201, 115, 22, 0.12);
+            --dao-queue-border: rgba(201, 115, 22, 0.2);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row--error {
+            --dao-queue-accent: #b91c1c;
+            --dao-queue-soft: rgba(220, 38, 38, 0.12);
+            --dao-queue-border: rgba(220, 38, 38, 0.2);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-cell {
+            min-width: 0;
+            display: grid;
+            gap: 8px;
+            align-content: start;
+            padding: 12px 14px;
+            border-radius: 14px;
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-cell--server {
+            gap: 12px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-server {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 12px;
+            align-items: start;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-index {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 34px;
+            height: 34px;
+            padding: 0 10px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, var(--dao-queue-soft), rgba(255, 255, 255, 0.98));
+            border: 1px solid var(--dao-queue-border);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+            color: var(--dao-queue-accent);
+            font-size: 12px;
+            font-weight: 800;
+            line-height: 1;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-server-main {
+            min-width: 0;
+            display: grid;
+            gap: 8px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-notes {
+            display: grid;
+            gap: 6px;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-note {
+            margin: 0;
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(226, 232, 240, 0.92);
+            background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.92));
+            color: #475569;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: normal;
+            word-break: break-word;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-meta-card {
+            min-height: 100%;
+            display: grid;
+            gap: 10px;
+            align-content: center;
+            justify-items: start;
+            padding: 2px 0;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-value {
+            margin: 0;
+            color: #10220a;
+            font-size: 15px;
+            font-weight: 800;
+            line-height: 1.3;
+            word-break: break-word;
+        }
+
+        #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-value--empty {
+            color: #64748b;
+        }
+
         #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] {
             background: rgba(2, 6, 23, 0.84);
             backdrop-filter: blur(12px) saturate(1.08);
@@ -2683,6 +2844,46 @@ const ensureCardLicenseModalStyles = () => {
             box-shadow: 0 14px 22px rgba(2, 6, 23, 0.26);
         }
 
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-header-cell,
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-cell-label {
+            color: #94a3b8;
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-row {
+            box-shadow: 0 16px 30px rgba(2, 6, 23, 0.26);
+            border-color: rgba(148, 163, 184, 0.16);
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.9));
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-row:hover {
+            box-shadow: 0 18px 34px rgba(2, 6, 23, 0.32);
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-cell {
+            border-color: rgba(148, 163, 184, 0.12);
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.82));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-index {
+            background: linear-gradient(180deg, var(--dao-queue-soft), rgba(15, 23, 42, 0.96));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-note {
+            border-color: rgba(148, 163, 184, 0.12);
+            background: linear-gradient(180deg, rgba(2, 6, 23, 0.54), rgba(15, 23, 42, 0.7));
+            color: #cbd5e1;
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-value {
+            color: #f8fafc;
+        }
+
+        #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__queue-value--empty {
+            color: #94a3b8;
+        }
+
         #${CARD_LICENSE_MODAL_ID}[data-theme='dark'] .dao-license-modal__group .dao-license-modal__chip {
             background: rgba(30, 41, 59, 0.9);
             color: var(--dao-group-accent);
@@ -2770,6 +2971,20 @@ const ensureCardLicenseModalStyles = () => {
             to { transform: rotate(360deg); }
         }
 
+        @media (max-width: 960px) {
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-header {
+                display: none;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row {
+                grid-template-columns: 1fr;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-cell-label {
+                display: block;
+            }
+        }
+
         @media (max-width: 640px) {
             #${CARD_LICENSE_MODAL_ID} {
                 padding: 12px;
@@ -2826,6 +3041,26 @@ const ensureCardLicenseModalStyles = () => {
 
             #${CARD_LICENSE_MODAL_ID} .dao-license-modal__license-meta {
                 justify-content: flex-start;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-row {
+                padding: 10px;
+                gap: 10px;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-cell {
+                padding: 11px 12px;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-server {
+                gap: 10px;
+            }
+
+            #${CARD_LICENSE_MODAL_ID} .dao-license-modal__queue-index {
+                min-width: 30px;
+                height: 30px;
+                padding: 0 8px;
+                font-size: 11px;
             }
 
             #${CARD_LICENSE_MODAL_ID}[data-display-mode='list'] .dao-license-modal__license-item {
@@ -3728,7 +3963,6 @@ const buildBulkLicenseQueueStats = (run) => run.items.reduce((stats, item) => {
 const buildBulkLicenseQueueContent = (run) => {
     const fragment = document.createDocumentFragment();
     const stats = buildBulkLicenseQueueStats(run);
-    const useCompactLayout = window.matchMedia('(max-width: 960px)').matches;
     const summaryPanel = createCardLicenseModalNode('section', 'dao-license-modal__panel');
     summaryPanel.appendChild(
         createCardLicenseModalNode(
@@ -3777,23 +4011,16 @@ const buildBulkLicenseQueueContent = (run) => {
         return fragment;
     }
 
-    const listNode = createCardLicenseModalNode('div', 'dao-license-modal__group-list');
-    listNode.style.display = 'grid';
-    listNode.style.gap = '10px';
+    const headerRow = createCardLicenseModalNode('div', 'dao-license-modal__queue-header');
+    ['Сервер', 'Результат', 'Термін'].forEach((label) => {
+        headerRow.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__queue-header-cell', label));
+    });
+    listPanel.appendChild(headerRow);
 
-    const headerRow = createCardLicenseModalNode('div', 'dao-license-modal__section-caption');
-    headerRow.style.cssText = useCompactLayout
-        ? 'display:none;'
-        : 'display:grid; grid-template-columns:minmax(0,1.9fr) minmax(180px,1fr) minmax(150px,0.9fr); gap:12px; align-items:center; padding:0 4px 6px 4px; color:#64748b; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;';
-
-    if (!useCompactLayout) {
-        ['Сервер', 'Результат', 'Термін'].forEach((label) => {
-            headerRow.appendChild(createCardLicenseModalNode('span', '', label));
-        });
-        listPanel.appendChild(headerRow);
-    }
+    const listNode = createCardLicenseModalNode('div', 'dao-license-modal__queue-list');
 
     run.items.forEach((item, index) => {
+        const itemTone = resolveBulkLicenseQueueItemTone(item);
         const resultLabel = formatBulkLicenseResultLabel(item);
         const normalizedMessage = String(item?.message || '').trim();
         const normalizedDetails = String(item?.details || '').trim();
@@ -3802,52 +4029,56 @@ const buildBulkLicenseQueueContent = (run) => {
             && normalizedDetails !== resultLabel
             && normalizedDetails !== normalizedMessage
             && normalizedDetails !== 'Операцію завершено без додаткових деталей.';
-        const row = createCardLicenseModalNode('article', 'dao-license-modal__license-item');
-        row.style.cssText = useCompactLayout
-            ? 'display:grid; grid-template-columns:minmax(0,1fr); gap:12px; align-items:start;'
-            : 'display:grid; grid-template-columns:minmax(0,1.9fr) minmax(180px,1fr) minmax(150px,0.9fr); gap:12px; align-items:start;';
+        const row = createCardLicenseModalNode('article', `dao-license-modal__queue-row dao-license-modal__queue-row--${itemTone}`);
 
-        const main = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
-        main.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-name', `${index + 1}. ${item.label}`));
+        const main = createCardLicenseModalNode('div', 'dao-license-modal__queue-cell dao-license-modal__queue-cell--server');
+        main.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__queue-cell-label', 'Сервер'));
+
+        const serverContent = createCardLicenseModalNode('div', 'dao-license-modal__queue-server');
+        serverContent.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__queue-index', String(index + 1)));
+
+        const serverMain = createCardLicenseModalNode('div', 'dao-license-modal__queue-server-main');
+        serverMain.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-name', item.label));
+
+        const notes = createCardLicenseModalNode('div', 'dao-license-modal__queue-notes');
         if (shouldRenderMessage) {
-            const messageNode = createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', normalizedMessage);
-            messageNode.style.whiteSpace = 'normal';
-            main.appendChild(messageNode);
+            notes.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__queue-note', normalizedMessage));
         }
         if (shouldRenderDetails) {
-            const detailsNode = createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', normalizedDetails);
-            detailsNode.style.whiteSpace = 'normal';
-            main.appendChild(detailsNode);
+            notes.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__queue-note', normalizedDetails));
         }
+        if (notes.childElementCount) {
+            serverMain.appendChild(notes);
+        }
+        serverContent.appendChild(serverMain);
+        main.appendChild(serverContent);
 
-        const resultCell = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
-        resultCell.appendChild(
+        const resultCell = createCardLicenseModalNode('div', 'dao-license-modal__queue-cell');
+        resultCell.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__queue-cell-label', 'Результат'));
+        const resultMeta = createCardLicenseModalNode('div', 'dao-license-modal__queue-meta-card');
+        resultMeta.appendChild(
             createCardLicenseModalNode(
                 'span',
-                `dao-license-modal__status-pill dao-license-modal__status-pill--${resolveBulkLicenseQueueItemTone(item)}`,
+                `dao-license-modal__status-pill dao-license-modal__status-pill--${itemTone}`,
                 resultLabel
             )
         );
+        resultCell.appendChild(resultMeta);
 
-        const licenseCell = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
-        licenseCell.appendChild(createCardLicenseModalNode('p', 'dao-license-modal__license-subtitle', 'Термін'));
-        const licenseValueNode = createCardLicenseModalNode('p', 'dao-license-modal__license-name', buildBulkLicenseValiditySummary(item));
-        licenseValueNode.style.fontSize = '14px';
-        licenseValueNode.style.marginTop = '6px';
-        licenseCell.appendChild(licenseValueNode);
+        const licenseCell = createCardLicenseModalNode('div', 'dao-license-modal__queue-cell');
+        licenseCell.appendChild(createCardLicenseModalNode('span', 'dao-license-modal__queue-cell-label', 'Термін'));
+        const licenseMeta = createCardLicenseModalNode('div', 'dao-license-modal__queue-meta-card');
+        const validitySummary = buildBulkLicenseValiditySummary(item);
+        const licenseValueNode = createCardLicenseModalNode('p', 'dao-license-modal__queue-value', validitySummary);
+        if (validitySummary === '—') {
+            licenseValueNode.classList.add('dao-license-modal__queue-value--empty');
+        }
+        licenseMeta.appendChild(licenseValueNode);
+        licenseCell.appendChild(licenseMeta);
 
         row.appendChild(main);
-        if (useCompactLayout) {
-            const compactMeta = createCardLicenseModalNode('div', 'dao-license-modal__license-main');
-            compactMeta.appendChild(resultCell);
-            compactMeta.appendChild(licenseCell);
-            compactMeta.style.display = 'grid';
-            compactMeta.style.gap = '12px';
-            row.appendChild(compactMeta);
-        } else {
-            row.appendChild(resultCell);
-            row.appendChild(licenseCell);
-        }
+        row.appendChild(resultCell);
+        row.appendChild(licenseCell);
         listNode.appendChild(row);
     });
 
@@ -4427,105 +4658,17 @@ const scheduleCardLoginSuccessReset = (requestToken) => {
     }, CARD_LOGIN_SUCCESS_RESET_MS);
 };
 
-const fetchLastErrorForClient = async (clientId) => {
-    const response = await fetch('https://planfix-to-syrve.com:8000/get_last_error/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ client_id: clientId }),
-    });
-
-    if (!response.ok) {
-        throw new Error(`Bad request, plugin could not reach server. Status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return (data.last_error || '').trim();
+const isSendDataSuccessMessage = (message = '') => {
+    return String(message || '').trim() === SEND_DATA_SUCCESS_MESSAGE;
 };
 
-const isCardErrorRelevantToServer = (errorText, context) => {
-    if (!errorText || !context?.server) {
-        return false;
-    }
-
-    const normalizedError = errorText.toLowerCase();
-    const candidates = [context.server.toLowerCase()];
-
-    if (context.port) {
-        candidates.push(`${context.server.toLowerCase()}:${context.port}`);
-        candidates.push(`port ${context.port}`);
-        candidates.push(`порт ${context.port}`);
-    }
-
-    return candidates.some((candidate) => normalizedError.includes(candidate));
-};
-
-const refreshCardServerError = async (context, options = {}) => {
-    const { forceShowAnyError = false } = options;
-    if (hasPersistentManualCardError()) {
-        return false;
-    }
-
-    if (!context?.server) {
-        clearCardErrorMessage({ preserveManual: true });
-        return false;
-    }
-
+const readSendDataResponseMessage = async (response) => {
     try {
-        const clientId = await getUserInputFromStorage();
-        if (!clientId || clientId === 'default_value') {
-            clearCardErrorMessage({ preserveManual: true });
-            return false;
-        }
-
-        const lastError = await fetchLastErrorForClient(clientId);
-        if (!lastError) {
-            clearCardErrorMessage({ preserveManual: true });
-            return false;
-        }
-
-        if (forceShowAnyError || isCardErrorRelevantToServer(lastError, context)) {
-            setCardErrorMessage(`Остання помилка для сервера ${context.server}${context.port ? `:${context.port}` : ''}:\n${lastError}`, {
-                source: CARD_ERROR_SOURCE_SERVER_POLL
-            });
-            return true;
-        }
-
-        clearCardErrorMessage({ preserveManual: true });
-        return false;
+        const data = await response.json();
+        return typeof data?.message === 'string' ? data.message.trim() : '';
     } catch (error) {
-        console.error('Не вдалося отримати останню помилку для картки:', error);
-        clearCardErrorMessage({ preserveManual: true });
-        return false;
+        return '';
     }
-};
-
-const pollCardServerError = async (context, options = {}) => {
-    const { forceShowAnyError = false, fallbackMessage = '' } = options;
-    const pollToken = ++cardErrorPollToken;
-
-    for (const delay of CARD_ERROR_POLL_DELAYS) {
-        if (delay > 0) {
-            await wait(delay);
-        }
-
-        if (pollToken !== cardErrorPollToken) {
-            return false;
-        }
-
-        const rendered = await refreshCardServerError(context, { forceShowAnyError });
-        if (rendered) {
-            return true;
-        }
-    }
-
-    if (pollToken === cardErrorPollToken && fallbackMessage) {
-        setCardErrorMessage(fallbackMessage);
-        return true;
-    }
-
-    return false;
 };
 
 // Основна логіка
@@ -4665,36 +4808,37 @@ const pollCardServerError = async (context, options = {}) => {
                             },
                             body: JSON.stringify(payload),
                         });
+                        const responseMessage = await readSendDataResponseMessage(response);
 
                         if (requestToken !== cardLoginRequestToken) {
                             return;
                         }
 
                         if (response.ok) {
-                            console.log(await response.json(), response.status);
-                            console.log("Дані успішно надіслано.");
+                            console.log(responseMessage || 'Дані успішно надіслано.', response.status);
+
+                            if (responseMessage && !isSendDataSuccessMessage(responseMessage)) {
+                                resetCardLoginStatus();
+                                setCardErrorMessage(responseMessage);
+                                return;
+                            }
+
                             setCardLoginProgress('waiting');
-                            const hasError = await pollCardServerError(finalServerContext);
+                            await wait(CARD_LOGIN_SUCCESS_MESSAGE_DELAY_MS);
 
                             if (requestToken !== cardLoginRequestToken) {
                                 return;
                             }
 
-                            clearCardLoginStatusTimeout();
                             setCardLoginButtonState(false);
-
-                            if (hasError) {
-                                setCardLoginProgress('idle');
-                                return;
-                            }
-
                             setCardLoginProgress('success');
                             scheduleCardLoginSuccessReset(requestToken);
                         } else {
                             console.error("Помилка при надсиланні:", response.status, response.statusText);
-                            await pollCardServerError(finalServerContext || serverContext, {
-                                fallbackMessage: `Не вдалося виконати запит до сервера ${finalServerContext.server}${finalServerContext.port ? `:${finalServerContext.port}` : ''}. Код відповіді: ${response.status}.`
-                            });
+                            setCardErrorMessage(
+                                responseMessage
+                                    || `Не вдалося виконати запит до сервера ${finalServerContext.server}${finalServerContext.port ? `:${finalServerContext.port}` : ''}. Код відповіді: ${response.status}.`
+                            );
                             resetCardLoginStatus();
                         }
                     } catch (error) {
@@ -5673,68 +5817,6 @@ const pollCardServerError = async (context, options = {}) => {
         });
     });
 
-    const syncCardWebActionGroupTrailingSpace = (group) => {
-        if (!(group instanceof HTMLElement)) {
-            return;
-        }
-
-        const apiButton = group.querySelector(`#${API_BUTTON_ID}`);
-        if (!(apiButton instanceof HTMLButtonElement) || group.dataset.expanded !== 'true') {
-            group.style.marginRight = '0';
-            return;
-        }
-
-        const reservedRightSpace = Math.max(
-            0,
-            apiButton.offsetWidth
-                - CARD_WEB_API_BUTTON_OVERLAP_PX
-                + CARD_WEB_API_BUTTON_EXPANDED_SHIFT_PX
-                + CARD_WEB_API_BUTTON_CLEARANCE_PX
-        );
-
-        group.style.marginRight = reservedRightSpace > 0 ? `${Math.ceil(reservedRightSpace)}px` : '0';
-    };
-
-    const setCardWebActionGroupExpanded = (group, expanded) => {
-        if (!(group instanceof HTMLElement)) {
-            return;
-        }
-
-        const apiButton = group.querySelector(`#${API_BUTTON_ID}`);
-        if (!(apiButton instanceof HTMLButtonElement)) {
-            return;
-        }
-
-        const shouldExpand = Boolean(expanded);
-        group.dataset.expanded = shouldExpand ? 'true' : 'false';
-        group.style.zIndex = shouldExpand ? '14' : '0';
-        apiButton.style.opacity = shouldExpand ? '1' : '0';
-        apiButton.style.transform = shouldExpand
-            ? `translate(${CARD_WEB_API_BUTTON_EXPANDED_SHIFT_PX}px, -50%) scale(1)`
-            : `translate(${CARD_WEB_API_BUTTON_COLLAPSED_SHIFT_PX}px, -50%) scale(0.96)`;
-        apiButton.style.pointerEvents = shouldExpand ? 'auto' : 'none';
-
-        if (!shouldExpand) {
-            group.style.marginRight = '0';
-            return;
-        }
-
-        syncCardWebActionGroupTrailingSpace(group);
-    };
-
-    const syncCardWebActionGroupExpandedState = (group) => {
-        if (!(group instanceof HTMLElement)) {
-            return;
-        }
-
-        const apiButton = group.querySelector(`#${API_BUTTON_ID}`);
-        const shouldExpand = group.matches(':hover')
-            || group.contains(document.activeElement)
-            || (apiButton instanceof HTMLButtonElement && apiButton.disabled);
-
-        setCardWebActionGroupExpanded(group, shouldExpand);
-    };
-
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = 'open-resto-button';
@@ -5881,18 +5963,6 @@ const pollCardServerError = async (context, options = {}) => {
     };
 
     const createWebBtn = (scopeRoot) => {
-        const group = document.createElement('div');
-        group.id = WEB_BUTTON_GROUP_ID;
-        group.dataset.cardWebActionGroup = 'true';
-        group.style.cssText = `
-            position: relative;
-            display: inline-flex;
-            align-items: center;
-            flex: 0 0 auto;
-            overflow: visible;
-            min-height: 28px;
-        `;
-
         const btn = document.createElement('button');
         btn.id = WEB_BUTTON_ID;
         btn.type = 'button';
@@ -5910,35 +5980,6 @@ const pollCardServerError = async (context, options = {}) => {
             color: #fff;
             transition: opacity 0.2s ease;
             white-space: nowrap;
-            position: relative;
-            z-index: 1;
-        `;
-
-        const apiBtn = document.createElement('button');
-        apiBtn.id = API_BUTTON_ID;
-        apiBtn.type = 'button';
-        apiBtn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.api;
-        apiBtn.textContent = 'API';
-        apiBtn.style.cssText = `
-            margin-left: 0;
-            cursor: pointer;
-            padding: 3px 10px;
-            border-radius: 4px;
-            border: none;
-            font-weight: 600;
-            font-size: 13px;
-            background: #0369a1;
-            color: #fff;
-            white-space: nowrap;
-            position: absolute;
-            top: 50%;
-            left: calc(100% - ${CARD_WEB_API_BUTTON_OVERLAP_PX}px);
-            opacity: 0;
-            transform: translate(${CARD_WEB_API_BUTTON_COLLAPSED_SHIFT_PX}px, -50%) scale(0.96);
-            transform-origin: left center;
-            pointer-events: none;
-            z-index: 0;
-            transition: opacity 0.2s ease, transform 0.22s ease, background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
         `;
 
         btn.addEventListener('mouseenter', () => {
@@ -5980,13 +6021,41 @@ const pollCardServerError = async (context, options = {}) => {
             }
         });
 
-        apiBtn.addEventListener('mouseenter', () => {
-            if (!apiBtn.disabled) {
-                apiBtn.style.opacity = '1';
+        return btn;
+    };
+
+    const createApiBtn = (scopeRoot) => {
+        const btn = document.createElement('button');
+        btn.id = API_BUTTON_ID;
+        btn.type = 'button';
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.api;
+        btn.textContent = 'Веб:API';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #0369a1;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+
+        btn.addEventListener('mouseenter', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '0.82';
             }
         });
-        apiBtn.addEventListener('click', async () => {
-            const currentScopeRoot = getCardScopeRoot(apiBtn) || scopeRoot;
+        btn.addEventListener('mouseleave', () => {
+            if (!btn.disabled) {
+                btn.style.opacity = '1';
+            }
+        });
+        btn.addEventListener('click', async () => {
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
             let apiUrl;
 
             try {
@@ -6000,8 +6069,7 @@ const pollCardServerError = async (context, options = {}) => {
 
             invalidateCardErrorPolling();
             clearCardErrorMessage();
-            setCardWebActionGroupExpanded(group, true);
-            setCardActionButtonLoading(apiBtn, true, 'Відкриваю...');
+            setCardActionButtonLoading(btn, true, 'Відкриваю...');
 
             try {
                 await openCardWebUrlWithCredentials({
@@ -6011,32 +6079,11 @@ const pollCardServerError = async (context, options = {}) => {
                 console.error('Не вдалося відкрити API-адресу сервера:', error);
                 setCardErrorMessage(error?.message || 'Не вдалося відкрити API-адресу сервера.');
             } finally {
-                setCardActionButtonLoading(apiBtn, false);
-                window.requestAnimationFrame(() => {
-                    syncCardWebActionGroupExpandedState(group);
-                });
+                setCardActionButtonLoading(btn, false);
             }
         });
 
-        group.addEventListener('pointerenter', () => {
-            setCardWebActionGroupExpanded(group, true);
-        });
-        group.addEventListener('pointerleave', () => {
-            syncCardWebActionGroupExpandedState(group);
-        });
-        group.addEventListener('focusin', () => {
-            setCardWebActionGroupExpanded(group, true);
-        });
-        group.addEventListener('focusout', () => {
-            window.requestAnimationFrame(() => {
-                syncCardWebActionGroupExpandedState(group);
-            });
-        });
-
-        group.appendChild(btn);
-        group.appendChild(apiBtn);
-        syncCardWebActionGroupExpandedState(group);
-        return group;
+        return btn;
     };
 
     const createPeriodBtn = (scopeRoot) => {
@@ -6187,6 +6234,7 @@ const pollCardServerError = async (context, options = {}) => {
             container.appendChild(createPeriodBtn(scopeRoot));
             container.appendChild(createLoyaltyBtn(scopeRoot));
             container.appendChild(createWebBtn(scopeRoot));
+            container.appendChild(createApiBtn(scopeRoot));
             if (isTaskPage()) {
                 container.appendChild(createHelpDeskDraftBtn(scopeRoot));
             }
@@ -6218,17 +6266,34 @@ const pollCardServerError = async (context, options = {}) => {
             periodButton.after(existingLoyaltyButton);
         }
 
-        const existingWebButtonGroup = container.querySelector(`#${WEB_BUTTON_GROUP_ID}`);
+        container.querySelectorAll('[data-card-web-action-group="true"]').forEach((groupNode) => groupNode.remove());
+
+        const existingWebButton = container.querySelector(`#${WEB_BUTTON_ID}`);
+        const existingApiButton = container.querySelector(`#${API_BUTTON_ID}`);
         const loyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
-        if (!existingWebButtonGroup) {
-            const webButtonGroup = createWebBtn(scopeRoot);
+        if (!existingWebButton) {
+            const webButton = createWebBtn(scopeRoot);
             if (loyaltyButton) {
-                loyaltyButton.after(webButtonGroup);
+                loyaltyButton.after(webButton);
             } else {
-                container.appendChild(webButtonGroup);
+                container.appendChild(webButton);
             }
-        } else if (loyaltyButton && loyaltyButton.nextElementSibling !== existingWebButtonGroup) {
-            loyaltyButton.after(existingWebButtonGroup);
+        } else if (loyaltyButton && loyaltyButton.nextElementSibling !== existingWebButton) {
+            loyaltyButton.after(existingWebButton);
+        }
+
+        const webButton = container.querySelector(`#${WEB_BUTTON_ID}`);
+        if (!existingApiButton) {
+            const apiButton = createApiBtn(scopeRoot);
+            if (webButton) {
+                webButton.after(apiButton);
+            } else if (loyaltyButton) {
+                loyaltyButton.after(apiButton);
+            } else {
+                container.appendChild(apiButton);
+            }
+        } else if (webButton && webButton.nextElementSibling !== existingApiButton) {
+            webButton.after(existingApiButton);
         }
 
         const existingHelpDeskButton = container.querySelector(`#${HELPDESK_DRAFT_BUTTON_ID}`);
@@ -6257,11 +6322,7 @@ const pollCardServerError = async (context, options = {}) => {
             scheduleCardServerAvailabilityCheck(serverResolution.availabilityPlan, serverValueElement);
         }
 
-        if (serverData) {
-            pollCardServerError(serverData).catch((error) => {
-                console.error('Не вдалося оновити помилку при ініціалізації картки:', error);
-            });
-        } else {
+        if (!serverData) {
             clearCardPeriodMessage();
             clearCardErrorMessage();
             clearCardVersionStatus(scopeRoot);

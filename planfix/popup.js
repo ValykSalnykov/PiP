@@ -41,6 +41,7 @@ const STORAGE_KEYS = {
   accessNotice: "extensionAccessNotice",
   daoServiceStatus: "daoServiceStatus",
   serverContext: "lastServerContext",
+  lastManualErrorRequestAt: "planfixLastManualErrorRequestAt",
   modeDescriptions: "modeDescriptions",
   licenseDisplayMode: "planfixLicenseDisplayMode",
   taskHighlightEnabled: "pipTimeTrackerTaskHighlightEnabled",
@@ -50,7 +51,8 @@ const STORAGE_KEYS = {
 
 const KNOWN_443_DOMAINS = ["syrve.online", "daocloud.it"];
 const HTTP_ONLY_DOMAINS = ["daocloud.fun"];
-const INLINE_ERROR_POLL_DELAYS = [0, 1200, 2500, 5000];
+const SEND_DATA_SUCCESS_MESSAGE = "Користувач вже має обліковку, все гуд";
+const LAST_ERROR_REQUEST_COOLDOWN_MS = 30 * 1000;
 const STATUS_BOX_TONES = ["neutral", "warning", "success", "error"];
 const STATUS_PILL_TONES = ["neutral", "warning", "success", "error"];
 const MODE_TOGGLE_OPTION_VALUE = "__toggle__";
@@ -70,13 +72,14 @@ const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
   overdueBlinkEnabled: false
 });
 
-let inlineErrorPollToken = 0;
 let popupAccessState = null;
 let isAccessSetupForced = false;
 let knownModeDescriptions = [];
 let currentModeDescription = "";
 let isSyncingModeSelect = false;
 let daoServiceStatusRequest = null;
+let lastManualErrorRequestAt = 0;
+let showErrorCooldownTimerId = 0;
 
 const storageGet = (keys) => new Promise((resolve) => {
   chrome.storage.local.get(keys, (result) => {
@@ -335,6 +338,63 @@ const setErrorMessage = (message = "") => {
 
 const clearErrorMessage = () => {
   setErrorMessage("");
+};
+
+const isSendDataSuccessMessage = (message = "") => {
+  return String(message || "").trim() === SEND_DATA_SUCCESS_MESSAGE;
+};
+
+const readResponseMessage = async (response) => {
+  try {
+    const data = await response.json();
+    return typeof data?.message === "string" ? data.message.trim() : "";
+  } catch (error) {
+    return "";
+  }
+};
+
+const getLastErrorCooldownRemainingMs = () => {
+  if (!lastManualErrorRequestAt) {
+    return 0;
+  }
+
+  return Math.max(0, LAST_ERROR_REQUEST_COOLDOWN_MS - (Date.now() - lastManualErrorRequestAt));
+};
+
+const clearShowErrorCooldownTimer = () => {
+  if (!showErrorCooldownTimerId) {
+    return;
+  }
+
+  clearTimeout(showErrorCooldownTimerId);
+  showErrorCooldownTimerId = 0;
+};
+
+const syncShowErrorButtonCooldownState = () => {
+  if (!showErrorButton) {
+    return;
+  }
+
+  const remainingMs = getLastErrorCooldownRemainingMs();
+  const isCoolingDown = remainingMs > 0;
+  showErrorButton.disabled = isCoolingDown;
+  showErrorButton.setAttribute("aria-disabled", isCoolingDown ? "true" : "false");
+
+  clearShowErrorCooldownTimer();
+  if (!isCoolingDown) {
+    return;
+  }
+
+  showErrorCooldownTimerId = window.setTimeout(() => {
+    showErrorCooldownTimerId = 0;
+    syncShowErrorButtonCooldownState();
+  }, remainingMs);
+};
+
+const startShowErrorButtonCooldown = async () => {
+  lastManualErrorRequestAt = Date.now();
+  syncShowErrorButtonCooldownState();
+  await storageSet({ [STORAGE_KEYS.lastManualErrorRequestAt]: lastManualErrorRequestAt });
 };
 
 const applyStatusTone = (element, baseClass, tone, tones) => {
@@ -842,14 +902,6 @@ const clearInlineServerError = () => {
   setInlineServerError("");
 };
 
-const invalidateInlineErrorPolling = () => {
-  inlineErrorPollToken += 1;
-};
-
-const wait = (delay) => new Promise((resolve) => {
-  setTimeout(resolve, delay);
-});
-
 const applyServerFieldState = () => {
   const selection = selectPreferredServerAddress(serverField.value);
   const value = selection?.server || "";
@@ -889,88 +941,6 @@ const fetchLastError = async (clientId) => {
 
   const data = await response.json();
   return (data.last_error || "").trim();
-};
-
-const isErrorRelevantToServer = (errorText, context) => {
-  if (!errorText || !context?.server) {
-    return false;
-  }
-
-  const normalizedError = errorText.toLowerCase();
-  const normalizedServer = context.server.toLowerCase();
-  const candidates = [normalizedServer];
-
-  if (context.port) {
-    candidates.push(`${normalizedServer}:${context.port}`);
-    candidates.push(`port ${context.port}`);
-    candidates.push(`порт ${context.port}`);
-  }
-
-  return candidates.some((candidate) => normalizedError.includes(candidate));
-};
-
-const refreshInlineServerError = async (options = {}) => {
-  const { forceShowAnyError = false } = options;
-  const userId = (await storageGet([STORAGE_KEYS.userId]))[STORAGE_KEYS.userId];
-  const context = getCurrentServerContext();
-
-  if (!userId || !context?.server) {
-    if (!userId) {
-      setErrorCount(0);
-    }
-    clearInlineServerError();
-    return false;
-  }
-
-  try {
-    const lastError = await fetchLastError(userId);
-    setErrorCount(lastError ? 1 : 0);
-
-    if (!lastError) {
-      clearInlineServerError();
-      return false;
-    }
-
-    if (forceShowAnyError || isErrorRelevantToServer(lastError, context)) {
-      setInlineServerError(`Остання помилка для сервера ${context.server}${context.port ? `:${context.port}` : ""}:\n${lastError}`);
-      return true;
-    }
-
-    clearInlineServerError();
-    return false;
-  } catch (error) {
-    console.error("Error fetching inline server error:", error);
-    setErrorCount(0);
-    clearInlineServerError();
-    return false;
-  }
-};
-
-const pollInlineServerError = async (options = {}) => {
-  const { forceShowAnyError = false, fallbackMessage = "" } = options;
-  const pollToken = ++inlineErrorPollToken;
-
-  for (const delay of INLINE_ERROR_POLL_DELAYS) {
-    if (delay > 0) {
-      await wait(delay);
-    }
-
-    if (pollToken !== inlineErrorPollToken) {
-      return false;
-    }
-
-    const rendered = await refreshInlineServerError({ forceShowAnyError });
-    if (rendered) {
-      return true;
-    }
-  }
-
-  if (pollToken === inlineErrorPollToken && fallbackMessage) {
-    setInlineServerError(fallbackMessage);
-    return true;
-  }
-
-  return false;
 };
 
 const updateClientIdUI = (value) => {
@@ -1083,6 +1053,7 @@ const persistUserId = async () => {
   const result = await storageGet([
     STORAGE_KEYS.daoServiceStatus,
     STORAGE_KEYS.serverContext,
+    STORAGE_KEYS.lastManualErrorRequestAt,
     STORAGE_KEYS.modeDescriptions,
     STORAGE_KEYS.licenseDisplayMode,
     STORAGE_KEYS.taskHighlightEnabled,
@@ -1091,6 +1062,7 @@ const persistUserId = async () => {
   ]);
   const serverContext = result[STORAGE_KEYS.serverContext] || null;
   const daoServiceStatus = result[STORAGE_KEYS.daoServiceStatus] || null;
+  lastManualErrorRequestAt = Number(result[STORAGE_KEYS.lastManualErrorRequestAt]) || 0;
   knownModeDescriptions = getStoredModeDescriptions(result);
   const licenseDisplayMode = getStoredLicenseDisplayMode(result);
   const highlightSettings = getTaskHighlightSettings(result);
@@ -1136,8 +1108,8 @@ const persistUserId = async () => {
   restoreServerContext(serverContext);
   applyLicenseDisplayModeState(licenseDisplayMode);
   applyTaskHighlightSettingsState(highlightSettings);
+  syncShowErrorButtonCooldownState();
 
-  await refreshInlineServerError();
   await refreshDaoServiceStatus(true);
 })();
 
@@ -1265,7 +1237,6 @@ claimAccessButton?.addEventListener("click", async () => {
 
 // Автовибір порту
 serverField.addEventListener("input", () => {
-  invalidateInlineErrorPolling();
   applyServerFieldState();
 
   clearInlineServerError();
@@ -1273,65 +1244,70 @@ serverField.addEventListener("input", () => {
 });
 
 portField.addEventListener("input", () => {
-  invalidateInlineErrorPolling();
   clearInlineServerError();
   persistCurrentServerContext();
 });
 
 // Одноразове відправлення даних
-sendDataButton.addEventListener("click", () => {
-  chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
-    const userId = result[STORAGE_KEYS.userId];
-    if (!userId) {
-      alert("Спочатку збережіть User ID.");
-      return;
-    }
+sendDataButton.addEventListener("click", async () => {
+  const result = await storageGet([STORAGE_KEYS.userId]);
+  const userId = result[STORAGE_KEYS.userId];
+  if (!userId) {
+    alert("Спочатку збережіть User ID.");
+    return;
+  }
 
-    const serverResolution = getCurrentServerContextResult();
-    const context = serverResolution.context;
-    const server = context?.server || "";
-    let port = context?.port || "";
+  const serverResolution = getCurrentServerContextResult();
+  const context = serverResolution.context;
+  const server = context?.server || "";
+  const port = context?.port || "";
 
-    if (!server) {
-      alert(serverResolution.errorMessage || "Please, input server address.");
-      return;
-    }
+  if (!server) {
+    alert(serverResolution.errorMessage || "Please, input server address.");
+    return;
+  }
 
-    if (!port) {
-      alert("Please, input server port.");
-      return;
-    }
+  if (!port) {
+    alert("Please, input server port.");
+    return;
+  }
 
-    const payload = { address: server, port: port, client_id: userId };
+  const payload = { address: server, port, client_id: userId };
+  clearInlineServerError();
 
-    try {
-      const response = await fetch("https://planfix-to-syrve.com:8000/send_data/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+  try {
+    const response = await fetch("https://planfix-to-syrve.com:8000/send_data/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const responseMessage = await readResponseMessage(response);
 
-      if (response.ok) {
-        await response.json();
-        console.log("Data sent successfully!\n");
-        await persistCurrentServerContext();
-        await pollInlineServerError();
-      } else {
-        console.log("Error sending data. Status: " + response.status);
-        await persistCurrentServerContext();
-        await pollInlineServerError({
-          forceShowAnyError: false,
-          fallbackMessage: `Не вдалося виконати запит до сервера ${server}${port ? `:${port}` : ""}. Код відповіді: ${response.status}.`
-        });
+    await persistCurrentServerContext();
+
+    if (response.ok) {
+      console.log(responseMessage || "Data sent successfully!", response.status);
+
+      if (responseMessage && !isSendDataSuccessMessage(responseMessage)) {
+        setInlineServerError(responseMessage);
+        return;
       }
-    } catch (error) {
-      console.error("Network error:", error);
-      console.log("Network error. Check console.");
-      invalidateInlineErrorPolling();
-      await persistCurrentServerContext();
-      setInlineServerError(`Помилка підключення до сервера ${server}${port ? `:${port}` : ""}. Перевірте адресу, порт та доступність сервера.`);
+
+      clearInlineServerError();
+      return;
     }
-  });
+
+    console.log("Error sending data. Status: " + response.status);
+    setInlineServerError(
+      responseMessage
+        || `Не вдалося виконати запит до сервера ${server}${port ? `:${port}` : ""}. Код відповіді: ${response.status}.`
+    );
+  } catch (error) {
+    console.error("Network error:", error);
+    console.log("Network error. Check console.");
+    await persistCurrentServerContext();
+    setInlineServerError(`Помилка підключення до сервера ${server}${port ? `:${port}` : ""}. Перевірте адресу, порт та доступність сервера.`);
+  }
 });
 
 // Отримати поточний режим
@@ -1494,27 +1470,35 @@ modeSelect?.addEventListener("change", async () => {
 
 // Показати останню помилку
 showErrorButton.addEventListener("click", async () => {
+  if (showErrorButton.disabled) {
+    return;
+  }
+
   if ((errorMessage?.textContent || "").trim()) {
     clearErrorMessage();
     return;
   }
 
-  chrome.storage.local.get([STORAGE_KEYS.userId], async (result) => {
-    const clientId = result[STORAGE_KEYS.userId];
-    if (!clientId) {
-      setErrorMessage("Будь ласка, збережіть User ID спочатку.");
-      return;
-    }
+  if (getLastErrorCooldownRemainingMs() > 0) {
+    syncShowErrorButtonCooldownState();
+    return;
+  }
 
-    try {
-      const lastError = await fetchLastError(clientId);
-      setErrorCount(lastError ? 1 : 0);
-      setErrorMessage(lastError ? `Остання помилка:\n${lastError}` : "Помилок не знайдено.");
-      await refreshInlineServerError();
-    } catch (error) {
-      console.error("Error fetching last error:", error);
-      setErrorMessage("Помилка при запиті.");
-    }
-  });
+  const result = await storageGet([STORAGE_KEYS.userId]);
+  const clientId = result[STORAGE_KEYS.userId];
+  if (!clientId) {
+    setErrorMessage("Будь ласка, збережіть User ID спочатку.");
+    return;
+  }
+
+  try {
+    await startShowErrorButtonCooldown();
+    const lastError = await fetchLastError(clientId);
+    setErrorCount(lastError ? 1 : 0);
+    setErrorMessage(lastError ? `Остання помилка:\n${lastError}` : "Помилок не знайдено.");
+  } catch (error) {
+    console.error("Error fetching last error:", error);
+    setErrorMessage("Помилка при запиті.");
+  }
 });
 

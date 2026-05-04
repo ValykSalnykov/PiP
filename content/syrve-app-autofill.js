@@ -38,7 +38,8 @@
     .catch(() => {});
 
   function isSyrveAppPage() {
-    return window.location.hostname.endsWith('.syrve.app');
+    return window.location.hostname === 'syrve.app'
+      || window.location.hostname.endsWith('.syrve.app');
   }
 
   function readAutoLoginState() {

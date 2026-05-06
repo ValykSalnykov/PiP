@@ -209,10 +209,10 @@ const isPublicCardDomainHost = (value) => {
         return false;
     }
 
-    return normalizedValue.split('.').every((label) => (
+    const labels = normalizedValue.split('.');
+    return labels.every((label) => (
         /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)
-        && !/^\d+$/.test(label)
-    ));
+    )) && labels.some((label) => !/^\d+$/.test(label));
 };
 
 const classifyCardServerHost = (value) => {
@@ -392,6 +392,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
         }
 
+        const showLtNotice = activeHelpDeskDraftButton?.dataset.helpdeskLtNotice === 'true';
         activeHelpDeskDraftRequestId = null;
         resetActiveHelpDeskDraftButton();
 
@@ -401,7 +402,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         clearCardErrorMessage();
-        setCardPeriodMessage('Чернетку HelpDeskEddy підготовлено. Перевірте форму та створіть заявку вручну.');
+        setCardHelpDeskDraftReadyMessage({ showLtNotice });
     }
 });
 
@@ -428,6 +429,10 @@ const CARD_BUTTONS_ID = 'license-buttons-panel';
 const CARD_ERROR_ID = 'license-buttons-panel-error';
 const CARD_PERIOD_ID = 'license-buttons-panel-period';
 const CARD_VERSION_STATUS_ATTR = 'data-dao-version-status';
+const LICENSE_BUTTON_ID = 'check-card-license-button';
+const RESTO_BUTTON_ID = 'open-resto-button';
+const DEVICES_BUTTON_ID = 'open-connections-button';
+const PERIOD_BUTTON_ID = 'get-period-button';
 const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const WEB_BUTTON_ID = 'open-server-web-url-button';
 const API_BUTTON_ID = 'open-server-api-url-button';
@@ -436,9 +441,11 @@ const CARD_BUTTON_TOOLTIP_ATTR = 'data-card-button-tooltip';
 const CARD_BUTTON_ACTION_DISABLED_ATTR = 'data-card-button-action-disabled';
 const CARD_BUTTON_DISABLED_MESSAGES = Object.freeze({
     loyaltyMissing: 'Нема логіну Loyalty',
+    serverMissing: 'Нема адреси сервера',
+    serverExternalRequired: 'Потрібна зовнішня адреса сервера',
+    serverInvalid: 'Некоректна адреса сервера',
     webMissing: 'Нема адреси вебу',
-    webInvalid: 'Некоректна адреса вебу',
-    apiUnsupported: 'Адреса вебу не підходить для Веб:API'
+    webInvalid: 'Некоректна адреса вебу'
 });
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
@@ -477,7 +484,6 @@ const CARD_LOGIN_BUTTON_LABELS = [
 const SEND_DATA_SUCCESS_MESSAGE = 'Користувач вже має обліковку, все гуд';
 const PLANFIX_DARK_THEME_CLASS = 'dark-theme';
 const CARD_API_PATH = '/integration-management/index.html#/integrations';
-const CARD_API_SUPPORTED_HOST_SUFFIX = '.syrve.app';
 const CARD_BUTTON_INTENTS = {
     default: 'default',
     login: 'login',
@@ -635,6 +641,7 @@ const CARD_CLOUD_SUBSCRIPTION_LABELS = {
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it'];
 const CARD_HTTP_ONLY_DOMAINS = ['daocloud.fun'];
 const HELPDESK_DEFAULT_PRIORITY = 'Блокуюче';
+const HELPDESK_LT_NOTICE_TEXT = 'Сервер LT, прошу зауважити!';
 const CARD_ERROR_SOURCE_MANUAL = 'manual';
 const CARD_ERROR_SOURCE_SERVER_POLL = 'server-poll';
 const DAO_SERVICE_STATUS_STATES = {
@@ -782,6 +789,36 @@ const resolveCardServerContextFromRawInput = (rawServer, port) => {
     };
 };
 
+const buildCardServerActionAvailabilityFromRawInput = (rawServer, port = '') => {
+    const normalizedServer = String(rawServer || '').trim();
+    if (!normalizedServer || /^[\-–—]+$/.test(normalizedServer)) {
+        return {
+            actionDisabled: true,
+            tooltip: CARD_BUTTON_DISABLED_MESSAGES.serverMissing
+        };
+    }
+
+    const serverResolution = resolveCardServerContextFromRawInput(normalizedServer, port);
+    if (serverResolution?.context?.server) {
+        return {
+            actionDisabled: false,
+            tooltip: ''
+        };
+    }
+
+    if (serverResolution?.selection?.errorCode === 'private-only') {
+        return {
+            actionDisabled: true,
+            tooltip: CARD_BUTTON_DISABLED_MESSAGES.serverExternalRequired
+        };
+    }
+
+    return {
+        actionDisabled: true,
+        tooltip: String(serverResolution?.errorMessage || CARD_BUTTON_DISABLED_MESSAGES.serverInvalid).trim()
+    };
+};
+
 const buildCardServerUrl = (context, path = '/resto/') => {
     if (!context?.server) {
         return '';
@@ -854,11 +891,6 @@ const buildCardServerAvailabilityPlan = (candidates, port) => {
             ? ''
             : portErrorCandidate?.errorMessage || buildCardServerSelectionErrorMessage(selectPreferredCardServerCandidate(candidates))
     };
-};
-
-const isCardApiAutologinSupportedHost = (server) => {
-    const normalizedServer = normalizeServerHost(server);
-    return normalizedServer === 'syrve.app' || normalizedServer.endsWith(CARD_API_SUPPORTED_HOST_SUFFIX);
 };
 
 const getFreshCardServerAvailabilitySnapshot = (cacheKey) => {
@@ -1389,6 +1421,42 @@ const createCardPeriodDetailNode = (label, value) => {
     return detailNode;
 };
 
+const createCardPeriodMessageNode = (label, message, options = {}) => {
+    const detailNode = document.createElement('div');
+    detailNode.style.cssText = `
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px;
+        padding: 6px 10px;
+        border: 1px solid ${options.borderColor || '#d8e1ec'};
+        border-radius: 8px;
+        background: ${options.background || '#f8fbff'};
+        max-width: 100%;
+    `;
+
+    const labelNode = document.createElement('span');
+    labelNode.textContent = `${label}:`;
+    labelNode.style.cssText = `
+        color: ${options.labelColor || '#64748b'};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+    `;
+
+    const messageNode = document.createElement('span');
+    messageNode.textContent = message;
+    messageNode.style.cssText = `
+        color: ${options.valueColor || '#0f172a'};
+        font-weight: 600;
+        overflow-wrap: anywhere;
+    `;
+
+    detailNode.append(labelNode, messageNode);
+    return detailNode;
+};
+
 const setCardPeriodDetails = ({ periodStartDate = '', period = '' }) => {
     const periodNode = ensureCardPeriodNode();
     if (!periodNode) return;
@@ -1426,6 +1494,45 @@ const setCardPeriodMessage = (message) => {
     periodNode.replaceChildren();
     periodNode.textContent = normalizedMessage;
     periodNode.style.display = normalizedMessage ? 'block' : 'none';
+};
+
+const setCardHelpDeskDraftReadyMessage = ({ showLtNotice = false } = {}) => {
+    const periodNode = ensureCardPeriodNode();
+    if (!periodNode) return;
+
+    const detailsRow = document.createElement('div');
+    detailsRow.style.cssText = `
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+    `;
+
+    detailsRow.append(
+        createCardPeriodMessageNode('HelpDesk', 'Чернетку HelpDeskEddy підготовлено.', {
+            borderColor: '#fed7aa',
+            background: '#fff7ed',
+            labelColor: '#c2410c',
+            valueColor: '#9a3412'
+        })
+    );
+    detailsRow.append(
+        createCardPeriodMessageNode('Далі', 'Перевірте форму та створіть заявку вручну.')
+    );
+
+    if (showLtNotice) {
+        detailsRow.append(
+            createCardPeriodMessageNode('Увага', HELPDESK_LT_NOTICE_TEXT, {
+                borderColor: '#f59e0b',
+                background: '#fffbeb',
+                labelColor: '#b45309',
+                valueColor: '#92400e'
+            })
+        );
+    }
+
+    periodNode.replaceChildren(detailsRow);
+    periodNode.style.display = 'block';
 };
 
 const clearCardPeriodMessage = () => {
@@ -1842,6 +1949,7 @@ const resetActiveHelpDeskDraftButton = () => {
     }
 
     delete activeHelpDeskDraftButton.dataset.helpdeskDraftRequestId;
+    delete activeHelpDeskDraftButton.dataset.helpdeskLtNotice;
     setCardActionButtonLoading(activeHelpDeskDraftButton, false);
     activeHelpDeskDraftButton = null;
 };
@@ -4678,8 +4786,13 @@ const setCardLoginProgress = (state) => {
     const { button, fillNode, labelNode } = content;
     const isDarkTheme = isPlanfixDarkTheme();
     const loginTheme = getCardButtonIntentTheme(CARD_BUTTON_INTENTS.login);
+    const isActionDisabled = isCardActionButtonActionDisabled(button) && !button.disabled && state === 'idle';
 
-    applyCardLoginButtonTheme(button);
+    if (isActionDisabled) {
+        applyCardActionButtonTheme(button);
+    } else {
+        applyCardLoginButtonTheme(button);
+    }
 
     const stateMap = {
         idle: {
@@ -4738,12 +4851,14 @@ const setCardLoginProgress = (state) => {
 
     button.setAttribute('aria-busy', state === 'sending' || state === 'waiting' ? 'true' : 'false');
     button.dataset.progressState = state;
-    fillNode.style.transform = `scaleX(${Math.max(0, Math.min(config.progress, 100)) / 100})`;
+    fillNode.style.transform = isActionDisabled ? 'scaleX(0)' : `scaleX(${Math.max(0, Math.min(config.progress, 100)) / 100})`;
     fillNode.style.background = config.fill;
-    fillNode.style.opacity = String(config.opacity);
-    fillNode.style.boxShadow = config.shadow;
-    labelNode.textContent = config.text;
-    if (button.dataset.daoDiscoMode !== 'true') {
+    fillNode.style.opacity = isActionDisabled ? '0' : String(config.opacity);
+    fillNode.style.boxShadow = isActionDisabled ? 'none' : config.shadow;
+    labelNode.textContent = isActionDisabled
+        ? (button.dataset.baseLabel || 'Увійти в бекофіс')
+        : config.text;
+    if (!isActionDisabled && button.dataset.daoDiscoMode !== 'true') {
         button.style.color = config.textColor;
     }
 };
@@ -4808,6 +4923,57 @@ const readSendDataResponseMessage = async (response) => {
             const field72ValueElement = await waitForElement(
                 "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(5) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
             );
+            const scopeRoot = field72ValueElement.closest('.g-popup-win-scroll-content, .page-layout-block.handbook-card-container, .object-edit-win-target, .object-edit-win-location-field')
+                || document;
+
+            const readCardFieldValue = (fieldValueElement) => {
+                const visibleValue = fieldValueElement?.textContent?.trim() || '';
+                if (visibleValue) {
+                    return visibleValue;
+                }
+
+                const fieldTarget = fieldValueElement?.closest('.field-target');
+                const rawValue = fieldTarget?.querySelector('.object-edit-field-input')?.getAttribute('data-value') || '';
+                if (rawValue.trim()) {
+                    return rawValue.trim();
+                }
+
+                const inputValue = fieldTarget?.querySelector('input, textarea')?.value || '';
+                return String(inputValue).trim();
+            };
+
+            const getField74ValueElement = () => (
+                scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text')
+            );
+
+            const syncCardLoginButtonAvailability = (button = document.getElementById('send-data-button')) => {
+                if (!(button instanceof HTMLButtonElement)) {
+                    return;
+                }
+
+                const availability = buildCardServerActionAvailabilityFromRawInput(
+                    readCardFieldValue(field72ValueElement),
+                    readCardFieldValue(getField74ValueElement())
+                );
+                const actionDisabled = availability.actionDisabled === true;
+                const tooltip = String(availability.tooltip || '').trim();
+
+                button.setAttribute(CARD_BUTTON_ACTION_DISABLED_ATTR, actionDisabled ? 'true' : 'false');
+                button.setAttribute('aria-disabled', actionDisabled ? 'true' : 'false');
+
+                if (tooltip) {
+                    button.setAttribute(CARD_BUTTON_TOOLTIP_ATTR, tooltip);
+                    button.title = tooltip;
+                } else {
+                    button.removeAttribute(CARD_BUTTON_TOOLTIP_ATTR);
+                    button.removeAttribute('title');
+                }
+
+                if (!button.disabled) {
+                    setCardLoginProgress(button.dataset.progressState || 'idle');
+                    syncCardLoginButtonWidth(button);
+                }
+            };
 
             console.log("Елемент знайдено:", field72ValueElement);
 
@@ -4860,12 +5026,14 @@ const readSendDataResponseMessage = async (response) => {
                 button.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.login;
                 button.dataset.daoDiscoMode = 'false';
                 button.addEventListener('mouseenter', () => {
-                    if (!button.disabled) {
+                    if (canUseCardActionButtonHover(button)) {
                         button.style.transform = 'translateY(-1px)';
                     }
                 });
                 button.addEventListener('mouseleave', () => {
-                    if (!button.disabled) {
+                    if (canUseCardActionButtonHover(button)) {
+                        button.style.transform = 'translateY(0)';
+                    } else {
                         button.style.transform = 'translateY(0)';
                     }
                 });
@@ -4884,18 +5052,20 @@ const readSendDataResponseMessage = async (response) => {
                 ensureCardLoginButtonContent();
                 syncCardLoginButtonWidth(button);
                 resetCardLoginStatus();
+                syncCardLoginButtonAvailability(button);
 
                 // Додаємо обробник події для кнопки
                 button.addEventListener('click', async () => {
+                    if (isCardActionButtonActionDisabled(button)) {
+                        return;
+                    }
+
                     console.log("Кнопка натиснута.");
                     invalidateCardErrorPolling();
                     clearCardErrorMessage();
 
-                    const rawField72Value = field72ValueElement.textContent.trim();
-                    const field74ValueElement = document.querySelector(
-                        "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(7) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
-                    );
-                    const field74Value = field74ValueElement ? field74ValueElement.textContent.trim() : '';
+                    const rawField72Value = readCardFieldValue(field72ValueElement);
+                    const field74Value = readCardFieldValue(getField74ValueElement());
                     const serverResolution = resolveCardServerContextFromRawInput(rawField72Value, field74Value);
                     const finalServerContext = serverResolution.context;
                     if (!finalServerContext?.server) {
@@ -4972,6 +5142,8 @@ const readSendDataResponseMessage = async (response) => {
                 });
 
             }
+
+            syncCardLoginButtonAvailability();
         };
 
         // Спостереження за зміною URL (зміна `key`)
@@ -5687,12 +5859,22 @@ const readSendDataResponseMessage = async (response) => {
     const getCardWebUrl = (scopeRoot = document) => getCardFieldTextByLabel(scopeRoot, CARD_WEB_FIELD_LABEL)
         || getCardFieldText(scopeRoot, CARD_WEB_FIELD_ID);
 
+    const buildCardServerActionAvailability = (scopeRoot = document) => buildCardServerActionAvailabilityFromRawInput(
+        getCardFieldText(scopeRoot, 72),
+        getCardFieldText(scopeRoot, 74)
+    );
+
     const buildCardActionButtonAvailability = (scopeRoot = document) => {
         const loyaltyLogin = String(getCardLoyaltyLogin(scopeRoot) || '').trim();
         const rawWebUrl = String(getCardWebUrl(scopeRoot) || '').trim();
         const hasWebValue = rawWebUrl.length > 0 && !/^[\-–—]+$/.test(rawWebUrl);
+        const serverActionAvailability = buildCardServerActionAvailability(scopeRoot);
 
         const availability = {
+            [LICENSE_BUTTON_ID]: serverActionAvailability,
+            [RESTO_BUTTON_ID]: serverActionAvailability,
+            [DEVICES_BUTTON_ID]: serverActionAvailability,
+            [PERIOD_BUTTON_ID]: serverActionAvailability,
             [LOYALTY_BUTTON_ID]: {
                 actionDisabled: !loyaltyLogin,
                 tooltip: loyaltyLogin ? '' : CARD_BUTTON_DISABLED_MESSAGES.loyaltyMissing
@@ -5739,9 +5921,7 @@ const readSendDataResponseMessage = async (response) => {
         } catch (error) {
             availability[API_BUTTON_ID] = {
                 actionDisabled: true,
-                tooltip: error?.message?.includes('syrve.app')
-                    ? CARD_BUTTON_DISABLED_MESSAGES.apiUnsupported
-                    : CARD_BUTTON_DISABLED_MESSAGES.webInvalid
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webInvalid
             };
         }
 
@@ -5777,7 +5957,7 @@ const readSendDataResponseMessage = async (response) => {
 
         const availability = buildCardActionButtonAvailability(scopeRoot);
 
-        [LOYALTY_BUTTON_ID, WEB_BUTTON_ID, API_BUTTON_ID].forEach((buttonId) => {
+        [LICENSE_BUTTON_ID, RESTO_BUTTON_ID, DEVICES_BUTTON_ID, PERIOD_BUTTON_ID, LOYALTY_BUTTON_ID, WEB_BUTTON_ID, API_BUTTON_ID].forEach((buttonId) => {
             const button = container.querySelector(`#${buttonId}`);
             if (!(button instanceof HTMLButtonElement)) {
                 return;
@@ -5811,23 +5991,26 @@ const readSendDataResponseMessage = async (response) => {
         const normalizedWebUrl = normalizeCardWebUrl(webUrl);
         const parsedWebUrl = new URL(normalizedWebUrl);
 
-        if (!isCardApiAutologinSupportedHost(parsedWebUrl.hostname)) {
-            throw new Error('Поле Web: посилання має вести на сервер *.syrve.app для автовходу API.');
-        }
-
         return new URL(CARD_API_PATH, `${parsedWebUrl.origin}/`).toString();
     };
 
     const buildHelpDeskDraftTitle = (payload) => `(...) - ${payload.restaurantName || '—'}`;
 
-    const buildHelpDeskDraftDescription = (payload) => ([
-        'Добрий день колеги!',
-        '',
-        payload.restaurantName || '—',
-        `SerialNumber: ${payload.uid || '—'}`,
-        `CRMID: ${payload.crmId || '—'}`,
-        `URL: ${payload.serverUrl || '—'}`
-    ].join('\n'));
+    const isHelpDeskCloudServer = (payload) => {
+        const normalizedServer = normalizeServerHost(payload?.server || payload?.serverUrl);
+        return normalizedServer === 'syrve.online' || normalizedServer.endsWith(CARD_CLOUD_SUBSCRIPTION_HOST_SUFFIX);
+    };
+
+    const buildHelpDeskDraftDescription = (payload) => {
+        return [
+            'Добрий день колеги!',
+            '',
+            payload.restaurantName || '—',
+            `SerialNumber: ${payload.uid || '—'}`,
+            `CRMID: ${payload.crmId || '—'}`,
+            `URL: ${payload.serverUrl || '—'}`
+        ].join('\n');
+    };
 
     const collectHelpDeskDraftPayload = (scopeRoot = document) => {
         const taskUrl = getCurrentTaskUrl();
@@ -5874,10 +6057,8 @@ const readSendDataResponseMessage = async (response) => {
     };
 
     const getCardServerResolution = (scopeRoot = document) => {
-        const serverField = scopeRoot.querySelector('.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text');
-        const rawServer = serverField ? serverField.textContent.trim() : '';
-        const portField = scopeRoot.querySelector('.field-target[f-id="74"] .ObjectEditFieldBase__view__value__text');
-        const port = portField ? portField.textContent.trim() : '';
+        const rawServer = getCardFieldText(scopeRoot, 72);
+        const port = getCardFieldText(scopeRoot, 74);
         return resolveCardServerContextFromRawInput(rawServer, port);
     };
 
@@ -5925,6 +6106,8 @@ const readSendDataResponseMessage = async (response) => {
 
     const createLicenseBtn = (label, color, scopeRoot) => {
         const btn = document.createElement('button');
+        btn.id = LICENSE_BUTTON_ID;
+        btn.type = 'button';
         btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.license;
         btn.textContent = label;
         btn.style.cssText = `
@@ -5941,17 +6124,20 @@ const readSendDataResponseMessage = async (response) => {
             white-space: nowrap;
         `;
         btn.addEventListener('mouseenter', () => {
-            if (!btn.disabled) {
+            if (canUseCardActionButtonHover(btn)) {
                 btn.style.opacity = '0.82';
             }
         });
         btn.addEventListener('mouseleave', () => {
-            if (!btn.disabled) {
-                btn.style.opacity = '1';
-            }
+            syncCardActionButtonInteractivity(btn);
         });
         btn.addEventListener('click', async () => {
-            const serverData = getServerData(scopeRoot, true);
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            const serverData = getServerData(currentScopeRoot, false);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -6042,7 +6228,8 @@ const readSendDataResponseMessage = async (response) => {
 
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
-        btn.id = 'open-resto-button';
+        btn.id = RESTO_BUTTON_ID;
+        btn.type = 'button';
         btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.resto;
         btn.textContent = 'Веб-морда';
         btn.style.cssText = `
@@ -6058,10 +6245,21 @@ const readSendDataResponseMessage = async (response) => {
             transition: opacity 0.2s ease;
             white-space: nowrap;
         `;
-        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
-        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+        btn.addEventListener('mouseenter', () => {
+            if (canUseCardActionButtonHover(btn)) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            syncCardActionButtonInteractivity(btn);
+        });
         btn.addEventListener('click', async () => {
-            const serverData = getPreferredOpenServerData(scopeRoot, true);
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            const serverData = getPreferredOpenServerData(currentScopeRoot, false);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -6090,7 +6288,8 @@ const readSendDataResponseMessage = async (response) => {
 
     const createDevicesBtn = (scopeRoot) => {
         const btn = document.createElement('button');
-        btn.id = 'open-connections-button';
+        btn.id = DEVICES_BUTTON_ID;
+        btn.type = 'button';
         btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.devices;
         btn.textContent = 'Зайняті ліцензії';
         btn.style.cssText = `
@@ -6106,10 +6305,21 @@ const readSendDataResponseMessage = async (response) => {
             transition: opacity 0.2s ease;
             white-space: nowrap;
         `;
-        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
-        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+        btn.addEventListener('mouseenter', () => {
+            if (canUseCardActionButtonHover(btn)) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            syncCardActionButtonInteractivity(btn);
+        });
         btn.addEventListener('click', async () => {
-            const serverData = getPreferredOpenServerData(scopeRoot, true);
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            const serverData = getPreferredOpenServerData(currentScopeRoot, false);
             if (!serverData) return;
 
             invalidateCardErrorPolling();
@@ -6317,7 +6527,8 @@ const readSendDataResponseMessage = async (response) => {
 
     const createPeriodBtn = (scopeRoot) => {
         const btn = document.createElement('button');
-        btn.id = 'get-period-button';
+        btn.id = PERIOD_BUTTON_ID;
+        btn.type = 'button';
         btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.period;
         btn.textContent = 'Період і версія';
         btn.style.cssText = `
@@ -6333,10 +6544,21 @@ const readSendDataResponseMessage = async (response) => {
             transition: opacity 0.2s ease;
             white-space: nowrap;
         `;
-        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.82'; });
-        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+        btn.addEventListener('mouseenter', () => {
+            if (canUseCardActionButtonHover(btn)) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            syncCardActionButtonInteractivity(btn);
+        });
         btn.addEventListener('click', () => {
-            const serverData = getServerData(scopeRoot, true);
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            const serverData = getServerData(currentScopeRoot, false);
             if (!serverData) return;
 
             if (activePeriodRequestId) {
@@ -6345,18 +6567,18 @@ const readSendDataResponseMessage = async (response) => {
             }
 
             const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const cardVersion = normalizeComparableCardVersion(getCardFieldText(scopeRoot, 96));
+            const cardVersion = normalizeComparableCardVersion(getCardFieldText(currentScopeRoot, 96));
             activePeriodRequestId = requestId;
             activePeriodRequestContext = {
                 requestId,
                 serverKey: buildCardServerContextKey(serverData),
                 cardVersion,
-                scopeRoot
+                scopeRoot: currentScopeRoot
             };
             lastCardVersionCheckResult = null;
             invalidateCardErrorPolling();
             clearCardErrorMessage();
-            clearCardVersionStatus(scopeRoot);
+            clearCardVersionStatus(currentScopeRoot);
             setCardPeriodMessage('Отримання періоду...');
 
             chrome.runtime.sendMessage({
@@ -6427,6 +6649,7 @@ const readSendDataResponseMessage = async (response) => {
 
             try {
                 const payload = collectHelpDeskDraftPayload(scopeRoot);
+                btn.dataset.helpdeskLtNotice = isHelpDeskCloudServer(payload) ? 'false' : 'true';
                 const response = await openHelpDeskDraft(payload);
                 activeHelpDeskDraftRequestId = response.requestId;
                 btn.dataset.helpdeskDraftRequestId = response.requestId;
@@ -6485,7 +6708,7 @@ const readSendDataResponseMessage = async (response) => {
 
         const existingLoyaltyButton = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
         if (!existingLoyaltyButton) {
-            const periodBtn = container.querySelector('#get-period-button');
+            const periodBtn = container.querySelector(`#${PERIOD_BUTTON_ID}`);
             const loyaltyBtn = createLoyaltyBtn(scopeRoot);
             if (periodBtn?.nextSibling) {
                 container.insertBefore(loyaltyBtn, periodBtn.nextSibling);

@@ -363,7 +363,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
         }
 
-        setCardPeriodMessage(`Період: ${message.period} днів`);
+        const periodStartDate = String(message.periodStartDate || '').trim();
+        setCardPeriodDetails({
+            periodStartDate,
+            period: message.period
+        });
 
         const healthVersion = normalizeComparableCardVersion(message.versionRaw || message.version);
         if (!requestContext?.serverKey || !requestContext.cardVersion || !healthVersion) {
@@ -1333,9 +1337,9 @@ const ensureCardPeriodNode = () => {
         padding: 6px 2px 0 2px;
         color: #0f172a;
         font-size: 12px;
-        line-height: 1.4;
+        line-height: 1.5;
         white-space: pre-wrap;
-        font-weight: 600;
+        font-weight: 500;
     `;
 
     const buttonsContainer = document.getElementById(CARD_BUTTONS_ID);
@@ -1352,11 +1356,74 @@ const ensureCardPeriodNode = () => {
     return periodNode;
 };
 
+const createCardPeriodDetailNode = (label, value) => {
+    const detailNode = document.createElement('div');
+    detailNode.style.cssText = `
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        padding: 6px 10px;
+        border: 1px solid #d8e1ec;
+        border-radius: 8px;
+        background: #f8fbff;
+    `;
+
+    const labelNode = document.createElement('span');
+    labelNode.textContent = `${label}:`;
+    labelNode.style.cssText = `
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+    `;
+
+    const valueNode = document.createElement('span');
+    valueNode.textContent = value;
+    valueNode.style.cssText = `
+        color: #0f172a;
+        font-weight: 600;
+    `;
+
+    detailNode.append(labelNode, valueNode);
+    return detailNode;
+};
+
+const setCardPeriodDetails = ({ periodStartDate = '', period = '' }) => {
+    const periodNode = ensureCardPeriodNode();
+    if (!periodNode) return;
+
+    const normalizedPeriod = String(period || '').trim();
+    const normalizedDate = String(periodStartDate || '').trim();
+    if (!normalizedPeriod) {
+        periodNode.textContent = '';
+        periodNode.style.display = 'none';
+        return;
+    }
+
+    const detailsRow = document.createElement('div');
+    detailsRow.style.cssText = `
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+    `;
+
+    if (normalizedDate) {
+        detailsRow.append(createCardPeriodDetailNode('Дата від', normalizedDate));
+    }
+
+    detailsRow.append(createCardPeriodDetailNode('Період', `${normalizedPeriod} днів`));
+    periodNode.replaceChildren(detailsRow);
+    periodNode.style.display = 'block';
+};
+
 const setCardPeriodMessage = (message) => {
     const periodNode = ensureCardPeriodNode();
     if (!periodNode) return;
 
     const normalizedMessage = (message || '').trim();
+    periodNode.replaceChildren();
     periodNode.textContent = normalizedMessage;
     periodNode.style.display = normalizedMessage ? 'block' : 'none';
 };

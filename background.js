@@ -2152,6 +2152,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     finalizeHealthPeriodRequest(serviceTabId, {
       period: message.period,
+      periodStartDate: message.periodStartDate,
       version: message.version,
       versionRaw: message.versionRaw,
       error: message.error
@@ -2387,6 +2388,7 @@ function finalizeHealthPeriodRequest(serviceTabId, result) {
   notifyHealthPeriodResult(request.requesterTabId, {
     requestId: request.requestId,
     period: result.period,
+    periodStartDate: result.periodStartDate,
     version: result.version,
     versionRaw: result.versionRaw,
     error: result.error

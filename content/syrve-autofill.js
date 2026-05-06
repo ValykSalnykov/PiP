@@ -21,11 +21,12 @@
 
   if (isHealthPage() && !loginElements && !hasReportedHealthPeriod()) {
     waitForHealthSnapshot()
-      .then(({ period, version, versionRaw }) => {
+      .then(({ period, periodStartDate, version, versionRaw }) => {
         markHealthPeriodReported();
         chrome.runtime.sendMessage({
           action: 'SYRVE_HEALTH_PERIOD_RESULT',
           period,
+          periodStartDate,
           version,
           versionRaw
         });
@@ -335,6 +336,11 @@
       .join('.');
   }
 
+  function extractHealthPeriodStartDate(value) {
+    const match = String(value || '').match(/Current server period:[\s\S]*?\(from\s+(\d{2}\.\d{2}\.\d{4})(?:\s+\d{2}:\d{2})?/i);
+    return match ? match[1] : '';
+  }
+
   function extractHealthSnapshot() {
     const rows = [...document.querySelectorAll('table tr')];
     if (rows.length < 2) {
@@ -359,16 +365,22 @@
       return null;
     }
 
-    const rawValue = valueCells[periodColumnIndex].textContent?.trim() || '';
+    const periodCell = valueCells[periodColumnIndex];
+    const rawValue = periodCell.textContent?.trim() || '';
     const matchedValue = rawValue.match(/\d+/);
     if (!matchedValue) {
       return null;
     }
 
+    const periodStartDate = extractHealthPeriodStartDate(
+      periodCell.getAttribute('title') || headerCells[periodColumnIndex]?.getAttribute('title') || ''
+    );
+
     const versionCell = document.getElementById('version');
     const versionRaw = extractHealthVersionRaw(versionCell?.textContent || '');
     return {
       period: matchedValue[0],
+      periodStartDate,
       version: normalizeHealthVersion(versionRaw),
       versionRaw
     };

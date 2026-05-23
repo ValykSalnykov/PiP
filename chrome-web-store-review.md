@@ -63,10 +63,16 @@ https://slm.daolog.net/dao-tools-plus/privacy-policy
 Дозвіл storage використовується для локального зберігання робочих налаштувань і стану доступу пристрою: User ID, згенерованого client ID пристрою, request ID, персонального extension key, списку дозволених прав доступу, формату масових ліцензійних операцій, службового повідомлення про стан доступу, останнього server context, timestamp останнього ручного запиту popup-діагностики, збережених описів режимів popup, вибраного вигляду ліцензій, налаштувань підсвічування завдань PiP і тимчасового стану та лічильника чернеток HelpDeskEddy. Це потрібно, щоб не вимагати повторного введення, зберігати робочий контекст між сеансами та підтримувати cooldown ручного запиту останньої помилки між відкриттями popup. Паролі Syrve в chrome.storage не зберігаються.
 ```
 
+### desktopCapture
+
+```text
+Дозвіл desktopCapture використовується лише після явного кліку користувача на сторінці зайнятих ліцензій Syrve для створення чернетки HelpDeskEddy щодо завислої ліцензії. Chrome показує системний вибір екрана, користувач має вручну обрати весь екран, після чого розширення створює один JPEG-скріншот і тимчасово передає його в чернетку HelpDeskEddy як вкладення. Якщо користувач скасовує вибір екрана, заявка не створюється.
+```
+
 ## Обґрунтування доступу до хостів
 
 ```text
-https://dao.planfix.ua/* — читання потрібних полів карток і задач, запуск робочих дій, HelpDeskEddy та ліцензійних сценаріїв. https://*.syrve.app/* — відкриття Web URL із Planfix, integrations і автологін. https://*.syrve.online/resto*, https://*.daocloud.it/resto*, http://*.daocloud.fun/resto*, https://*.daocloud.fun/resto* — legacy Syrve, автологін, відкритий період і версія; HTTP daocloud.fun потрібен лише для legacy-hosts. https://*.us-central1.hosted.app/*, https://hub.daolog.net/* — PiP-контролер, CSS пакета й локальні налаштування підсвічування. https://planfix-to-syrve.com:8000/* — popup/backend для server context, mode і last error. https://slm.daolog.net/* — backend доступу пристрою, credentials, availability і license API. https://pro.helpdeskeddy.com/* — чернетка HelpDeskEddy. https://loyalty.syrve.live/* — Loyalty автологін.
+https://dao.planfix.ua/* — читання потрібних полів карток і задач, запуск робочих дій, HelpDeskEddy та ліцензійних сценаріїв. https://*.syrve.app/* — відкриття Web URL із Planfix, integrations і автологін. https://*.syrve.online/resto*, https://*.daocloud.it/resto*, http://*.daocloud.fun/resto*, https://*.daocloud.fun/resto* — legacy Syrve, автологін, відкритий період і версія; HTTP daocloud.fun потрібен лише для legacy-hosts. http://*/resto/service/monitoring/connections.jsp* і https://*/resto/service/monitoring/connections.jsp* — обмежене підсвічування завислих рядків на службовій сторінці зайнятих ліцензій Syrve для серверів із різними доменами. https://*.us-central1.hosted.app/*, https://hub.daolog.net/* — PiP-контролер, CSS пакета й локальні налаштування підсвічування. https://planfix-to-syrve.com:8000/* — popup/backend для server context, mode і last error. https://slm.daolog.net/* — backend доступу пристрою, credentials, availability і license API. https://pro.helpdeskeddy.com/* — чернетка HelpDeskEddy. https://loyalty.syrve.live/* — Loyalty автологін.
 ```
 
 ## Віддалений код
@@ -86,6 +92,8 @@ https://dao.planfix.ua/* — читання потрібних полів кар
 - читає з Planfix лише ті поля, які потрібні для конкретної дії: адресу або порт сервера, Web: посилання, логін Loyalty, поля задачі для HelpDeskEddy, CRMID, версію Syrve та інші службові значення, які прямо відображаються в чернетці або ліцензійному статусі;
 - заповнює чернетку HelpDeskEddy значеннями з Planfix і повертає результат заповнення назад у вкладку Planfix;
 - читає зі службової сторінки Syrve значення відкритого періоду та версії і повертає результат в інтерфейс Planfix;
+- читає зі службової сторінки Syrve зайнятих ліцензій лише колонку Last activity і локально підкреслює рядки, де активність відстає від поточного часу більше заданого порогу;
+- після ручного вибору користувачем у Chrome desktop picker створює один скріншот екрана для вкладення в чернетку HelpDeskEddy щодо завислої ліцензії; скріншот тимчасово зберігається в chrome.storage.session і очищається після завершення або помилки заповнення чернетки;
 - передає локальні налаштування PiP-підсвічування на внутрішні DAO сторінки hub.daolog.net і *.us-central1.hosted.app через chrome.storage.
 ```
 

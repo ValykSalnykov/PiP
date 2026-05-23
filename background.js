@@ -34,6 +34,8 @@ const SUPPORTED_PROTOCOLS = new Set(['http:', 'https:', 'file:', 'ftp:']);
 const HEALTH_PERIOD_TIMEOUT_MS = 30000;
 const SYRVE_CREDENTIAL_TTL_MS = 120000;
 const HELPDESK_DRAFT_REQUEST_TTL_MS = 5 * 60 * 1000;
+const CONNECTIONS_HELPDESK_CONTEXT_TTL_MS = 30 * 60 * 1000;
+const STALE_LICENSE_HELPDESK_REQUEST_TTL_MS = 5 * 60 * 1000;
 const DAO_SERVICE_STATUS_TIMEOUT_MS = 10000;
 const DAO_SERVICE_STATUS_ALARM_NAME = 'dao-service-status-refresh';
 const DAO_SERVICE_STATUS_ALARM_PERIOD_MINUTES = 1;
@@ -51,7 +53,7 @@ const DAO_SERVICE_ACTION_ICON_SOURCE_PATHS = {
 };
 const LOYALTY_PAGE_URL = 'https://loyalty.syrve.live/ru-RU';
 const LOYALTY_PASSWORD = 'iikoRMS351';
-const DAO_ACCESS_SERVER_BASE_URL = 'https://daologistics.duckdns.org';
+const DAO_ACCESS_SERVER_BASE_URL = 'https://slm.daolog.net';
 const EXTENSION_ACCESS_REQUEST_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/request`;
 const EXTENSION_ACCESS_CLAIM_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/claim`;
 const EXTENSION_ACCESS_STATE_URL = `${DAO_ACCESS_SERVER_BASE_URL}/extension/access/state`;
@@ -60,6 +62,12 @@ const SERVER_AVAILABILITY_URL = `${DAO_ACCESS_SERVER_BASE_URL}/server/availabili
 const LICENSE_CHECK_URL = `${DAO_ACCESS_SERVER_BASE_URL}/license/check`;
 const LICENSE_UPDATE_URL = `${DAO_ACCESS_SERVER_BASE_URL}/license/update`;
 const HELPDESK_DRAFT_URL_BASE = 'https://pro.helpdeskeddy.com/ua/ticket/list/filter/id/352/ticket/create/draft/';
+const CONNECTIONS_PATH = '/resto/service/monitoring/connections.jsp';
+const STALE_LICENSE_HELPDESK_ISSUE_TITLE = 'Зависла ліцензія';
+const HELPDESK_ATTACHMENT_SESSION_KEY_PREFIX = 'helpDeskDraftAttachment:';
+const DESKTOP_CAPTURE_PAGE_PATH = 'capture/desktop-capture.html';
+const HELPDESK_INLINE_SCREENSHOT_DISPLAY_WIDTH = 1200;
+const HELPDESK_INLINE_SCREENSHOT_DISPLAY_HEIGHT = 675;
 const STORAGE_KEYS = {
   userId: 'userInput',
   legacyApiKey: 'credentialsApiKey',
@@ -71,7 +79,9 @@ const STORAGE_KEYS = {
   accessNotice: 'extensionAccessNotice',
   daoServiceStatus: 'daoServiceStatus',
   helpDeskDraftRequests: 'helpDeskDraftRequests',
-  helpDeskNextDraftNumber: 'helpDeskNextDraftNumber'
+  helpDeskNextDraftNumber: 'helpDeskNextDraftNumber',
+  connectionsHelpDeskContexts: 'connectionsHelpDeskContexts',
+  staleLicenseHelpDeskRequests: 'staleLicenseHelpDeskRequests'
 };
 const actionIconBitmapCache = new Map();
 const daoServiceActionIconCache = new Map();
@@ -167,6 +177,35 @@ function storageRemove(keys) {
   });
 }
 
+function sessionStorageGet(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.session.get(keys, (result) => {
+      resolve(result || {});
+    });
+  });
+}
+
+function sessionStorageSet(data) {
+  return new Promise((resolve) => {
+    chrome.storage.session.set(data, () => {
+      resolve();
+    });
+  });
+}
+
+function sessionStorageRemove(keys) {
+  const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : [keys].filter(Boolean);
+  if (!normalizedKeys.length) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    chrome.storage.session.remove(normalizedKeys, () => {
+      resolve();
+    });
+  });
+}
+
 function normalizeHelpDeskDraftRequestId(value) {
   const normalizedValue = String(value ?? '').trim();
   if (!normalizedValue) {
@@ -233,6 +272,300 @@ function setHelpDeskDraftRequests(entries) {
   return storageSet({
     [STORAGE_KEYS.helpDeskDraftRequests]: entries
   });
+}
+
+function pruneTimedObjectEntries(rawEntries, ttlMs, now = Date.now()) {
+  const sourceEntries = rawEntries && typeof rawEntries === 'object' && !Array.isArray(rawEntries)
+    ? rawEntries
+    : {};
+  const nextEntries = {};
+  let wasPruned = sourceEntries !== rawEntries;
+
+  Object.entries(sourceEntries).forEach(([key, entry]) => {
+    if (!entry || typeof entry !== 'object') {
+      wasPruned = true;
+      return;
+    }
+
+    const createdAt = Number(entry.createdAt);
+    if (!Number.isFinite(createdAt) || now - createdAt > ttlMs) {
+      wasPruned = true;
+      return;
+    }
+
+    nextEntries[key] = entry;
+  });
+
+  if (!wasPruned && Object.keys(nextEntries).length !== Object.keys(sourceEntries).length) {
+    wasPruned = true;
+  }
+
+  return {
+    entries: nextEntries,
+    wasPruned
+  };
+}
+
+async function getConnectionsHelpDeskContexts() {
+  const result = await storageGet(STORAGE_KEYS.connectionsHelpDeskContexts);
+  const { entries, wasPruned } = pruneTimedObjectEntries(
+    result?.[STORAGE_KEYS.connectionsHelpDeskContexts],
+    CONNECTIONS_HELPDESK_CONTEXT_TTL_MS
+  );
+
+  if (wasPruned) {
+    await storageSet({
+      [STORAGE_KEYS.connectionsHelpDeskContexts]: entries
+    });
+  }
+
+  return entries;
+}
+
+function setConnectionsHelpDeskContexts(entries) {
+  return storageSet({
+    [STORAGE_KEYS.connectionsHelpDeskContexts]: entries
+  });
+}
+
+async function storeConnectionsHelpDeskContext(tabId, payload) {
+  if (tabId === undefined || !payload || typeof payload !== 'object') {
+    return;
+  }
+
+  const contexts = await getConnectionsHelpDeskContexts();
+  contexts[String(tabId)] = {
+    createdAt: Date.now(),
+    payload
+  };
+  await setConnectionsHelpDeskContexts(contexts);
+}
+
+async function getConnectionsHelpDeskContext(tabId) {
+  if (tabId === undefined) {
+    return null;
+  }
+
+  const contexts = await getConnectionsHelpDeskContexts();
+  return contexts[String(tabId)] || null;
+}
+
+async function removeConnectionsHelpDeskContext(tabId) {
+  if (tabId === undefined) {
+    return;
+  }
+
+  const contexts = await getConnectionsHelpDeskContexts();
+  if (!contexts[String(tabId)]) {
+    return;
+  }
+
+  delete contexts[String(tabId)];
+  await setConnectionsHelpDeskContexts(contexts);
+}
+
+async function getStaleLicenseHelpDeskRequests() {
+  const result = await storageGet(STORAGE_KEYS.staleLicenseHelpDeskRequests);
+  const { entries, wasPruned } = pruneTimedObjectEntries(
+    result?.[STORAGE_KEYS.staleLicenseHelpDeskRequests],
+    STALE_LICENSE_HELPDESK_REQUEST_TTL_MS
+  );
+
+  if (wasPruned) {
+    await storageSet({
+      [STORAGE_KEYS.staleLicenseHelpDeskRequests]: entries
+    });
+  }
+
+  return entries;
+}
+
+function setStaleLicenseHelpDeskRequests(entries) {
+  return storageSet({
+    [STORAGE_KEYS.staleLicenseHelpDeskRequests]: entries
+  });
+}
+
+async function setStaleLicenseHelpDeskRequest(requestId, request) {
+  const requests = await getStaleLicenseHelpDeskRequests();
+  requests[requestId] = request;
+  await setStaleLicenseHelpDeskRequests(requests);
+}
+
+async function getStaleLicenseHelpDeskRequest(requestId) {
+  const requests = await getStaleLicenseHelpDeskRequests();
+  return requests[String(requestId || '')] || null;
+}
+
+async function removeStaleLicenseHelpDeskRequest(requestId) {
+  const requests = await getStaleLicenseHelpDeskRequests();
+  if (!requests[String(requestId || '')]) {
+    return;
+  }
+
+  delete requests[String(requestId || '')];
+  await setStaleLicenseHelpDeskRequests(requests);
+}
+
+async function removeStaleLicenseHelpDeskRequestsByTabId(tabId) {
+  if (tabId === undefined) {
+    return;
+  }
+
+  const requests = await getStaleLicenseHelpDeskRequests();
+  let didChange = false;
+  Object.entries(requests).forEach(([requestId, request]) => {
+    if (request?.requesterTabId === tabId || request?.captureTabId === tabId) {
+      if (request?.captureTabId === tabId && request?.requesterTabId !== tabId) {
+        notifyStaleLicenseHelpDeskResult(request.requesterTabId, {
+          requestId,
+          ok: false,
+          error: 'Вкладку створення скріншота закрито до завершення.'
+        });
+      }
+
+      delete requests[requestId];
+      didChange = true;
+    }
+  });
+
+  if (didChange) {
+    await setStaleLicenseHelpDeskRequests(requests);
+  }
+}
+
+async function getStaleLicenseHelpDeskRequestByRequesterTabId(tabId) {
+  if (tabId === undefined) {
+    return null;
+  }
+
+  const requests = await getStaleLicenseHelpDeskRequests();
+  const matchedEntry = Object.entries(requests).find(([, request]) => request?.requesterTabId === tabId);
+  if (!matchedEntry) {
+    return null;
+  }
+
+  const [requestId, request] = matchedEntry;
+  return {
+    requestId,
+    ...request
+  };
+}
+
+function isConnectionsPath(path) {
+  return String(path || '').split(/[?#]/, 1)[0] === CONNECTIONS_PATH;
+}
+
+function normalizeAttachmentStorageKey(value) {
+  const normalizedValue = String(value || '').trim();
+  return normalizedValue.startsWith(HELPDESK_ATTACHMENT_SESSION_KEY_PREFIX) ? normalizedValue : '';
+}
+
+function getHelpDeskAttachmentStorageKeys(payload) {
+  return Array.isArray(payload?.attachments)
+    ? payload.attachments
+      .map((attachment) => normalizeAttachmentStorageKey(attachment?.storageKey))
+      .filter(Boolean)
+    : [];
+}
+
+async function cleanupHelpDeskDraftAttachments(payload) {
+  const storageKeys = getHelpDeskAttachmentStorageKeys(payload);
+  if (!storageKeys.length) {
+    return;
+  }
+
+  await sessionStorageRemove(storageKeys);
+}
+
+function normalizeStaleLicenseText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeStaleLicenseEntries(licenses) {
+  if (!Array.isArray(licenses)) {
+    return [];
+  }
+
+  return licenses.reduce((result, license) => {
+    if (!license || typeof license !== 'object') {
+      return result;
+    }
+
+    const normalizedLicense = {
+      ipAddress: normalizeStaleLicenseText(license.ipAddress),
+      computerName: normalizeStaleLicenseText(license.computerName),
+      terminalName: normalizeStaleLicenseText(license.terminalName),
+      login: normalizeStaleLicenseText(license.login),
+      moduleId: normalizeStaleLicenseText(license.moduleId),
+      moduleName: normalizeStaleLicenseText(license.moduleName),
+      moduleDisplayName: normalizeStaleLicenseText(license.moduleDisplayName),
+      lastActivity: normalizeStaleLicenseText(license.lastActivity),
+      ageLabel: normalizeStaleLicenseText(license.ageLabel)
+    };
+
+    if (!normalizedLicense.lastActivity && !normalizedLicense.moduleDisplayName && !normalizedLicense.moduleName) {
+      return result;
+    }
+
+    result.push(normalizedLicense);
+    return result;
+  }, []).slice(0, 50);
+}
+
+function buildStaleLicenseDescription(payload) {
+  const baseDescription = String(payload?.description || '').trim();
+  const lines = baseDescription ? baseDescription.split('\n') : [
+    'Добрий день колеги!',
+    `Company: ${String(payload?.clientName || '').trim()}`,
+    `CrmOrganizationId: ${String(payload?.crmId || '').trim()}`,
+    `SerialNumber: ${String(payload?.uid || '').trim()}`,
+    `v. Syrve: ${String(payload?.version || '').trim()}`
+  ];
+
+  lines.push('');
+  lines.push('Допоможіть будь ласка. Зависла ліцензія');
+
+  return lines.join('\n');
+}
+
+function buildStaleLicenseHelpDeskPayload({ basePayload, sourceConnectionsUrl, staleLicenses, attachment }) {
+  const restaurantName = String(basePayload?.restaurantName || '').trim() || '—';
+  const nextPayload = {
+    ...basePayload,
+    issueTitle: STALE_LICENSE_HELPDESK_ISSUE_TITLE,
+    title: `${restaurantName}: ${STALE_LICENSE_HELPDESK_ISSUE_TITLE}`,
+    sourceConnectionsUrl: String(sourceConnectionsUrl || '').trim(),
+    staleLicenses,
+    attachments: attachment ? [attachment] : []
+  };
+
+  nextPayload.description = buildStaleLicenseDescription(nextPayload);
+  return nextPayload;
+}
+
+function notifyStaleLicenseHelpDeskResult(tabId, payload) {
+  if (tabId === undefined) {
+    return;
+  }
+
+  chrome.tabs.sendMessage(tabId, {
+    action: 'STALE_LICENSE_HELPDESK_REQUEST_RESULT',
+    ...payload
+  }).catch((error) => {
+    log.warn('Failed to deliver stale license HelpDesk result', {
+      tabId,
+      error: error?.message
+    });
+  });
+}
+
+function createScreenshotFileName(now = new Date()) {
+  const timestamp = now.toISOString()
+    .replace(/\.\d{3}Z$/, '')
+    .replace(/:/g, '-')
+    .replace('T', '_');
+  return `stale-license-connections-${timestamp}.jpg`;
 }
 
 async function reserveHelpDeskDraftNumber(existingRequests = null) {
@@ -336,6 +669,24 @@ async function getHelpDeskDraftRequestByTabId(tabId) {
   };
 }
 
+async function getHelpDeskDraftRequestByRequesterTabId(tabId) {
+  if (tabId === undefined) {
+    return null;
+  }
+
+  const requests = await getHelpDeskDraftRequests();
+  const matchedEntry = Object.entries(requests).find(([, request]) => request?.requesterTabId === tabId);
+  if (!matchedEntry) {
+    return null;
+  }
+
+  const [requestId, request] = matchedEntry;
+  return {
+    requestId,
+    ...request
+  };
+}
+
 function notifyHelpDeskDraftResult(requesterTabId, payload) {
   if (requesterTabId === undefined) {
     return;
@@ -360,6 +711,7 @@ async function finalizeHelpDeskDraftRequest({ requestId, ok, error, sourceTabId 
     return false;
   }
 
+  await cleanupHelpDeskDraftAttachments(request.payload);
   delete requests[normalizedRequestId];
   await setHelpDeskDraftRequests(requests);
   notifyHelpDeskDraftResult(request.requesterTabId, {
@@ -384,11 +736,14 @@ async function resolveClosedHelpDeskDraftTab(tabId) {
   const requests = await getHelpDeskDraftRequests();
   let didChange = false;
 
+  const attachmentCleanupTasks = [];
+
   Object.entries(requests).forEach(([requestId, request]) => {
     if (request?.targetTabId !== tabId) {
       return;
     }
 
+    attachmentCleanupTasks.push(cleanupHelpDeskDraftAttachments(request.payload));
     delete requests[requestId];
     didChange = true;
     notifyHelpDeskDraftResult(request.requesterTabId, {
@@ -400,6 +755,7 @@ async function resolveClosedHelpDeskDraftTab(tabId) {
   });
 
   if (didChange) {
+    await Promise.allSettled(attachmentCleanupTasks);
     await setHelpDeskDraftRequests(requests);
   }
 }
@@ -1358,6 +1714,58 @@ function sanitizeLicenseCheckLicenses(licenses) {
   }, []);
 }
 
+function sanitizeLicenseSnapshot(license) {
+  if (!license || typeof license !== 'object') {
+    return null;
+  }
+
+  const [normalizedLicense] = sanitizeLicenseSnapshots([license]);
+  return normalizedLicense || null;
+}
+
+function sanitizeLicenseSnapshots(licenses) {
+  if (!Array.isArray(licenses)) {
+    return [];
+  }
+
+  return licenses.reduce((result, license) => {
+    if (!license || typeof license !== 'object') {
+      return result;
+    }
+
+    const id = typeof license.id === 'string' || typeof license.id === 'number'
+      ? String(license.id).trim()
+      : '';
+    const name = typeof license.name === 'string' ? license.name.trim() : '';
+    const friendlyName = typeof license.friendlyName === 'string' ? license.friendlyName.trim() : '';
+    const groupId = typeof license.groupId === 'string' && license.groupId.trim()
+      ? license.groupId.trim()
+      : 'other';
+    const groupTitle = typeof license.groupTitle === 'string' && license.groupTitle.trim()
+      ? license.groupTitle.trim()
+      : '';
+    const countValue = Number(license.count);
+    const count = Number.isFinite(countValue) ? countValue : null;
+    const validUntil = sanitizeLicenseValidityValue(license.validUntil) || '';
+
+    if (!id && !name && !friendlyName) {
+      return result;
+    }
+
+    result.push({
+      id,
+      name,
+      friendlyName,
+      groupId,
+      groupTitle,
+      count,
+      validUntil
+    });
+
+    return result;
+  }, []);
+}
+
 function normalizeSyrveCredentialSet(payload, fallbackCredentialId) {
   const credentialIdValue = Number(payload?.credentialId ?? fallbackCredentialId);
   const credentialId = Number.isSafeInteger(credentialIdValue) && credentialIdValue > 0
@@ -1583,12 +1991,37 @@ async function fetchSyrveLicenseUpdate({ address, port, batchId = null, serialNu
     correlationId: typeof payload?.correlationId === 'string' && payload.correlationId.trim() ? payload.correlationId.trim() : '',
     statusMessage: typeof payload?.statusMessage === 'string' && payload.statusMessage.trim() ? payload.statusMessage.trim() : '',
     verifyAttempts: Number.isFinite(Number(payload?.verifyAttempts)) ? Number(payload.verifyAttempts) : 0,
+    requestedTargetLabel: typeof payload?.requestedTargetLabel === 'string' && payload.requestedTargetLabel.trim() ? payload.requestedTargetLabel.trim() : '',
+    targetLicenseDisplayName: typeof payload?.targetLicenseDisplayName === 'string' && payload.targetLicenseDisplayName.trim() ? payload.targetLicenseDisplayName.trim() : '',
+    updatedTargetLicenseDisplayName: typeof payload?.updatedTargetLicenseDisplayName === 'string' && payload.updatedTargetLicenseDisplayName.trim() ? payload.updatedTargetLicenseDisplayName.trim() : '',
+    targetBefore: sanitizeLicenseSnapshot(payload?.targetBefore),
+    targetAfter: sanitizeLicenseSnapshot(payload?.targetAfter),
+    serverBefore: sanitizeLicenseCheckServer(payload?.serverBefore),
+    serverAfter: sanitizeLicenseCheckServer(payload?.serverAfter),
+    licensesBefore: sanitizeLicenseSnapshots(payload?.licensesBefore),
+    licensesAfter: sanitizeLicenseSnapshots(payload?.licensesAfter),
+    targetLicenses: sanitizeLicenseSnapshots(payload?.targetLicenses),
     targetValidUntilBefore: sanitizeLicenseValidityValue(payload?.targetValidUntilBefore),
     targetValidUntilAfter: sanitizeLicenseValidityValue(payload?.targetValidUntilAfter),
     targetAvailableBefore: payload?.targetAvailableBefore === true,
     targetAvailableAfter: payload?.targetAvailableAfter === true,
     updatedTargetLicenses: sanitizeLicenseUpdateLicenses(payload?.updatedTargetLicenses),
-    diffSummary: sanitizeLicenseUpdateDiffSummary(payload?.diffSummary)
+    diffSummary: sanitizeLicenseUpdateDiffSummary(payload?.diffSummary),
+    freshnessStatus: typeof payload?.freshnessStatus === 'string' && payload.freshnessStatus.trim()
+      ? payload.freshnessStatus.trim()
+      : '',
+    freshnessReason: typeof payload?.freshnessReason === 'string' && payload.freshnessReason.trim()
+      ? payload.freshnessReason.trim()
+      : '',
+    freshnessThresholdDays: Number.isSafeInteger(Number(payload?.freshnessThresholdDays))
+      ? Number(payload.freshnessThresholdDays)
+      : null,
+    nearestTargetValidUntil: sanitizeLicenseValidityValue(payload?.nearestTargetValidUntil),
+    nearestTargetDaysUntilExpiry: Number.isSafeInteger(Number(payload?.nearestTargetDaysUntilExpiry))
+      ? Number(payload.nearestTargetDaysUntilExpiry)
+      : null,
+    hasTargetDateChange: payload?.hasTargetDateChange === true,
+    isCurrentByThreshold: payload?.isCurrentByThreshold === true,
   };
 }
 
@@ -1858,10 +2291,126 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       server: message.server,
       port: message.port,
       path: message.path,
-      active: message.active !== false
+      active: message.active !== false,
+      connectionsHelpDeskPayload: message.connectionsHelpDeskPayload
     })
       .then((tabId) => sendResponse({ ok: true, tabId }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to open Syrve page' }));
+
+    return true;
+  }
+
+  if (message?.action === 'GET_CONNECTIONS_HELPDESK_CONTEXT') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) {
+      sendResponse({ ok: false, error: 'Missing requester tab' });
+      return false;
+    }
+
+    getConnectionsHelpDeskContext(tabId)
+      .then((context) => sendResponse({ ok: true, available: Boolean(context?.payload) }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to read connections context' }));
+
+    return true;
+  }
+
+  if (message?.action === 'CREATE_STALE_LICENSE_HELPDESK_DRAFT') {
+    const requesterTabId = sender.tab?.id;
+    if (requesterTabId === undefined) {
+      sendResponse({ ok: false, error: 'Missing requester tab' });
+      return false;
+    }
+
+    (async () => {
+      const activeDraftRequest = await getHelpDeskDraftRequestByRequesterTabId(requesterTabId);
+      if (activeDraftRequest) {
+        throw new Error('Чернетка HelpDeskEddy вже створюється або заповнюється для цієї вкладки.');
+      }
+
+      const context = await getConnectionsHelpDeskContext(requesterTabId);
+      if (!context?.payload) {
+        throw new Error('Контекст Planfix для створення заявки не знайдено. Відкрийте цю сторінку кнопкою Зайняті ліцензії зі сторінки задачі Planfix.');
+      }
+
+      const staleLicenses = sanitizeStaleLicenseEntries(message.staleLicenses);
+      if (!staleLicenses.length) {
+        throw new Error('Не знайдено підсвічених завислих ліцензій.');
+      }
+
+      return startStaleLicenseHelpDeskCapture({
+        requesterTabId,
+        basePayload: context.payload,
+        staleLicenses,
+        sourceConnectionsUrl: String(message.sourceConnectionsUrl || sender.tab?.url || '').trim()
+      });
+    })()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to start stale license HelpDesk flow' }));
+
+    return true;
+  }
+
+  if (message?.action === 'PREPARE_STALE_LICENSE_SCREENSHOT_CAPTURE') {
+    if (!message.requestId) {
+      sendResponse({ ok: false, error: 'Missing screenshot request id' });
+      return false;
+    }
+
+    (async () => {
+      const request = await getStaleLicenseHelpDeskRequest(message.requestId);
+      if (!request) {
+        throw new Error('Запит створення скріншота не знайдено або час його дії сплив.');
+      }
+
+      await focusTabForScreenshot(request.requesterTabId);
+      await waitForConnectionsCaptureReady(request.requesterTabId);
+    })()
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to prepare screenshot target' }));
+
+    return true;
+  }
+
+  if (message?.action === 'STALE_LICENSE_SCREENSHOT_CAPTURE_RESULT') {
+    if (!message.requestId) {
+      sendResponse({ ok: false, error: 'Missing screenshot request id' });
+      return false;
+    }
+
+    completeStaleLicenseHelpDeskCapture({
+      requestId: message.requestId,
+      ok: message.ok !== false,
+      error: message.error,
+      dataUrl: message.dataUrl,
+      width: message.width,
+      height: message.height,
+      mimeType: message.mimeType,
+      sourceTabId: sender.tab?.id
+    })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to complete screenshot capture' }));
+
+    return true;
+  }
+
+  if (message?.action === 'GET_HELPDESK_DRAFT_ATTACHMENT') {
+    const storageKey = normalizeAttachmentStorageKey(message.storageKey);
+    if (!storageKey) {
+      sendResponse({ ok: false, error: 'Missing HelpDesk attachment key' });
+      return false;
+    }
+
+    sessionStorageGet(storageKey)
+      .then((result) => {
+        const attachment = result?.[storageKey];
+        if (!attachment?.dataUrl) {
+          sendResponse({ ok: false, error: 'Скріншот для заявки не знайдено або час його дії сплив.' });
+          return;
+        }
+
+        sendResponse({ ok: true, attachment });
+      })
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to read HelpDesk attachment' }));
 
     return true;
   }
@@ -2169,6 +2718,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
   clearSyrveCredentialsForTab(tabId);
   clearLoyaltyCredentialsForTab(tabId);
+  removeConnectionsHelpDeskContext(tabId).catch((error) => {
+    log.warn('Failed to remove connections HelpDesk context', {
+      tabId,
+      error: error?.message
+    });
+  });
+  removeStaleLicenseHelpDeskRequestsByTabId(tabId).catch((error) => {
+    log.warn('Failed to remove stale license HelpDesk request', {
+      tabId,
+      error: error?.message
+    });
+  });
 
   const request = HEALTH_PERIOD_REQUESTS.get(tabId);
   if (request) {
@@ -2267,6 +2828,241 @@ function buildSyrvePageUrl({ server, port, path }) {
   return `${protocol}://${normalizedServer}${portSegment}${normalizedPath}`;
 }
 
+async function startStaleLicenseHelpDeskCapture({ requesterTabId, basePayload, staleLicenses, sourceConnectionsUrl }) {
+  const existingRequest = await getStaleLicenseHelpDeskRequestByRequesterTabId(requesterTabId);
+  if (existingRequest) {
+    return {
+      requestId: existingRequest.requestId,
+      captureTabId: existingRequest.captureTabId || null
+    };
+  }
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const request = {
+    createdAt: Date.now(),
+    requesterTabId,
+    captureTabId: null,
+    basePayload,
+    staleLicenses,
+    sourceConnectionsUrl
+  };
+  await setStaleLicenseHelpDeskRequest(requestId, request);
+
+  try {
+    const captureTab = await createDesktopCaptureTab(requestId, requesterTabId);
+
+    return {
+      requestId,
+      captureTabId: captureTab.id
+    };
+  } catch (error) {
+    await removeStaleLicenseHelpDeskRequest(requestId);
+    throw error;
+  }
+}
+
+async function focusTabForScreenshot(tabId) {
+  if (tabId === undefined) {
+    throw new Error('Не знайдено вкладку таблиці для скріншота.');
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.windowId !== undefined) {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  }
+
+  await chrome.tabs.update(tabId, { active: true });
+}
+
+const waitForDelay = (timeoutMs) => new Promise((resolve) => {
+  setTimeout(resolve, timeoutMs);
+});
+
+async function waitForConnectionsCaptureReady(tabId, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        action: 'WAIT_STALE_LICENSE_CAPTURE_READY',
+        timeoutMs: Math.min(1200, Math.max(250, deadline - Date.now()))
+      });
+
+      if (response?.ok) {
+        return true;
+      }
+
+      lastError = new Error(response?.error || 'Таблиця ще не готова до скріншота.');
+    } catch (error) {
+      lastError = error;
+    }
+
+    await waitForDelay(200);
+  }
+
+  throw lastError || new Error('Не вдалося дочекатися таблиці для скріншота.');
+}
+
+function buildDesktopCapturePageUrl(requestId) {
+  const url = new URL(chrome.runtime.getURL(DESKTOP_CAPTURE_PAGE_PATH));
+  url.hash = new URLSearchParams({ requestId }).toString();
+  return url.toString();
+}
+
+function waitForTabLoad(tabId, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      reject(new Error('Технічна вкладка скріншота не завантажилась вчасно.'));
+    }, timeoutMs);
+
+    const finish = () => {
+      clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      resolve();
+    };
+
+    const handleUpdated = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        finish();
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(handleUpdated);
+    chrome.tabs.get(tabId)
+      .then((tab) => {
+        if (tab.status === 'complete') {
+          finish();
+        }
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        chrome.tabs.onUpdated.removeListener(handleUpdated);
+        reject(error);
+      });
+  });
+}
+
+async function createDesktopCaptureTab(requestId, requesterTabId) {
+  const requesterTab = await chrome.tabs.get(requesterTabId).catch(() => null);
+  const createProperties = {
+    url: buildDesktopCapturePageUrl(requestId),
+    active: true
+  };
+
+  if (requesterTab?.windowId !== undefined) {
+    createProperties.windowId = requesterTab.windowId;
+  }
+
+  const captureTab = await chrome.tabs.create(createProperties);
+  if (captureTab.id === undefined) {
+    throw new Error('Технічну вкладку скріншота створено без id.');
+  }
+
+  const existingRequest = await getStaleLicenseHelpDeskRequest(requestId);
+  if (existingRequest) {
+    await setStaleLicenseHelpDeskRequest(requestId, {
+      ...existingRequest,
+      captureTabId: captureTab.id
+    });
+  }
+
+  await waitForTabLoad(captureTab.id);
+  return captureTab;
+}
+
+async function completeStaleLicenseHelpDeskCapture({ requestId, ok, error, dataUrl, width, height, mimeType, sourceTabId }) {
+  const request = await getStaleLicenseHelpDeskRequest(requestId);
+  if (!request) {
+    throw new Error('Запит створення заявки не знайдено або час його дії сплив.');
+  }
+
+  await removeStaleLicenseHelpDeskRequest(requestId);
+
+  if (request.captureTabId !== undefined && request.captureTabId !== null) {
+    chrome.tabs.remove(request.captureTabId).catch(() => {});
+  } else if (sourceTabId !== undefined) {
+    chrome.tabs.remove(sourceTabId).catch(() => {});
+  }
+
+  if (ok === false) {
+    notifyStaleLicenseHelpDeskResult(request.requesterTabId, {
+      requestId,
+      ok: false,
+      error: error || 'Скріншот не створено.'
+    });
+    return;
+  }
+
+  const normalizedDataUrl = String(dataUrl || '').trim();
+  if (!normalizedDataUrl.startsWith('data:image/')) {
+    notifyStaleLicenseHelpDeskResult(request.requesterTabId, {
+      requestId,
+      ok: false,
+      error: 'Скріншот має некоректний формат.'
+    });
+    return;
+  }
+
+  const attachmentId = `${requestId}-screenshot`;
+  const storageKey = `${HELPDESK_ATTACHMENT_SESSION_KEY_PREFIX}${attachmentId}`;
+  const fileName = createScreenshotFileName();
+  const normalizedMimeType = String(mimeType || '').trim() || 'image/jpeg';
+  await sessionStorageSet({
+    [storageKey]: {
+      createdAt: Date.now(),
+      dataUrl: normalizedDataUrl,
+      fileName,
+      mimeType: normalizedMimeType,
+      insertMode: 'inline',
+      displayWidth: HELPDESK_INLINE_SCREENSHOT_DISPLAY_WIDTH,
+      displayHeight: HELPDESK_INLINE_SCREENSHOT_DISPLAY_HEIGHT,
+      width: Number(width) || 0,
+      height: Number(height) || 0
+    }
+  });
+
+  const payload = buildStaleLicenseHelpDeskPayload({
+    basePayload: request.basePayload || {},
+    sourceConnectionsUrl: request.sourceConnectionsUrl || '',
+    staleLicenses: request.staleLicenses || [],
+    attachment: {
+      id: attachmentId,
+      storageKey,
+      fileName,
+      mimeType: normalizedMimeType,
+      insertMode: 'inline',
+      displayWidth: HELPDESK_INLINE_SCREENSHOT_DISPLAY_WIDTH,
+      displayHeight: HELPDESK_INLINE_SCREENSHOT_DISPLAY_HEIGHT,
+      width: Number(width) || 0,
+      height: Number(height) || 0
+    }
+  });
+
+  try {
+    const draftResult = await openHelpDeskDraftTab({
+      requesterTabId: request.requesterTabId,
+      payload,
+      active: true
+    });
+
+    notifyStaleLicenseHelpDeskResult(request.requesterTabId, {
+      requestId,
+      ok: true,
+      helpDeskRequestId: draftResult.requestId,
+      helpdeskTabId: draftResult.tabId
+    });
+  } catch (openError) {
+    await cleanupHelpDeskDraftAttachments(payload);
+    notifyStaleLicenseHelpDeskResult(request.requesterTabId, {
+      requestId,
+      ok: false,
+      error: openError?.message || 'Не вдалося відкрити чернетку HelpDeskEddy.'
+    });
+  }
+}
+
 async function openHealthPeriodTab({ requesterTabId, server, port, requestId }) {
   const credentialSet = await fetchSyrveCredentials();
   const createdTab = await chrome.tabs.create({
@@ -2307,7 +3103,7 @@ async function openHealthPeriodTab({ requesterTabId, server, port, requestId }) 
   return createdTab.id;
 }
 
-async function openSyrvePage({ server, path, port, active = true }) {
+async function openSyrvePage({ server, path, port, active = true, connectionsHelpDeskPayload = null }) {
   const credentialSet = await fetchSyrveCredentials();
   const createdTab = await chrome.tabs.create({
     url: buildSyrvePageUrl({ server, port, path }),
@@ -2319,6 +3115,10 @@ async function openSyrvePage({ server, path, port, active = true }) {
   }
 
   cacheSyrveCredentialsForTab(createdTab.id, credentialSet);
+  if (isConnectionsPath(path) && connectionsHelpDeskPayload && typeof connectionsHelpDeskPayload === 'object') {
+    await storeConnectionsHelpDeskContext(createdTab.id, connectionsHelpDeskPayload);
+  }
+
   log.info('Opened Syrve page after credentials preflight', {
     serviceTabId: createdTab.id,
     server,

@@ -320,6 +320,176 @@
     await waitForEditorValue(editor, normalizedValue, EDITOR_VERIFY_TIMEOUT_MS);
   };
 
+  const dataUrlToFile = async ({ dataUrl, fileName, mimeType }) => {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    return new File([blob], fileName, {
+      type: mimeType || blob.type || 'image/jpeg'
+    });
+  };
+
+  const getDraftAttachment = async (attachment) => {
+    const response = await sendRuntimeMessage({
+      action: 'GET_HELPDESK_DRAFT_ATTACHMENT',
+      storageKey: attachment.storageKey
+    });
+
+    const resolvedAttachment = response.attachment || {};
+    if (!resolvedAttachment.dataUrl) {
+      throw new Error('Скріншот для заявки не знайдено.');
+    }
+
+    return {
+      dataUrl: resolvedAttachment.dataUrl,
+      fileName: resolvedAttachment.fileName || attachment.fileName || 'stale-license-connections.jpg',
+      mimeType: resolvedAttachment.mimeType || attachment.mimeType || 'image/jpeg',
+      insertMode: resolvedAttachment.insertMode || attachment.insertMode || '',
+      displayWidth: Number(resolvedAttachment.displayWidth || attachment.displayWidth) || 0,
+      displayHeight: Number(resolvedAttachment.displayHeight || attachment.displayHeight) || 0,
+      width: Number(resolvedAttachment.width || attachment.width) || 0,
+      height: Number(resolvedAttachment.height || attachment.height) || 0
+    };
+  };
+
+  const findAttachmentFileInput = () => {
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+    return inputs.find((input) => input instanceof HTMLInputElement && !input.disabled) || null;
+  };
+
+  const attachFileViaInput = async (file) => {
+    const input = findAttachmentFileInput();
+    if (!(input instanceof HTMLInputElement)) {
+      return false;
+    }
+
+    try {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      input.files = dataTransfer.files;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (error) {
+      return false;
+    }
+
+    await waitForDelay(300);
+    return input.files && Array.from(input.files).some((attachedFile) => attachedFile.name === file.name);
+  };
+
+  const hasEditorImageAttachment = (editor) => Boolean(
+    editor.querySelector('img, figure.image, .ck-widget.image, .ck-upload-placeholder')
+  );
+
+  const getEditorImages = (editor) => Array.from(editor.querySelectorAll('img'));
+
+  const applyInlineImageDisplaySize = (image, width, height) => {
+    if (!(image instanceof HTMLImageElement) || width <= 0 || height <= 0) {
+      return;
+    }
+
+    image.setAttribute('width', String(width));
+    image.setAttribute('height', String(height));
+    image.style.width = `${width}px`;
+    image.style.height = `${height}px`;
+    image.style.maxWidth = '100%';
+    image.style.objectFit = 'fill';
+
+    const figure = image.closest('figure');
+    if (figure instanceof HTMLElement) {
+      figure.style.width = `${width}px`;
+      figure.style.maxWidth = '100%';
+    }
+  };
+
+  const placeCursorAtEditorEnd = (editor) => {
+    const selection = window.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
+  const pasteFileIntoEditor = async (file, displaySize = {}) => {
+    const editor = document.querySelector('.ck-editor__editable[contenteditable="true"]');
+    if (!(editor instanceof HTMLElement) || typeof ClipboardEvent === 'undefined' || typeof DataTransfer === 'undefined') {
+      return false;
+    }
+
+    editor.focus();
+    placeCursorAtEditorEnd(editor);
+    const previousImageCount = getEditorImages(editor).length;
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    const pasteEvent = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dataTransfer
+    });
+
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: dataTransfer
+    });
+
+    editor.dispatchEvent(pasteEvent);
+    dispatchEditorEvents(editor, file.name, 'insertFromPaste');
+
+    try {
+      const attachmentNode = await waitForCondition(() => {
+        const images = getEditorImages(editor);
+        if (images.length > previousImageCount) {
+          return images[images.length - 1];
+        }
+
+        return editor.querySelector('.ck-upload-placeholder') || null;
+      }, 5000, 'прикріплення скріншота');
+
+      applyInlineImageDisplaySize(
+        attachmentNode,
+        Number(displaySize.width) || 0,
+        Number(displaySize.height) || 0
+      );
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const attachDraftAttachment = async (attachment) => {
+    const attachmentPayload = await getDraftAttachment(attachment);
+    const file = await dataUrlToFile(attachmentPayload);
+    const shouldPreferInline = attachmentPayload.insertMode === 'inline';
+    const displaySize = {
+      width: attachmentPayload.displayWidth,
+      height: attachmentPayload.displayHeight
+    };
+
+    if (shouldPreferInline && await pasteFileIntoEditor(file, displaySize)) {
+      return;
+    }
+
+    if (await attachFileViaInput(file)) {
+      return;
+    }
+
+    if (!shouldPreferInline && await pasteFileIntoEditor(file, displaySize)) {
+      return;
+    }
+
+    throw new Error('Не вдалося прикріпити скріншот до чернетки HelpDeskEddy.');
+  };
+
+  const attachDraftAttachments = async (attachments) => {
+    const normalizedAttachments = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+    for (const attachment of normalizedAttachments) {
+      await attachDraftAttachment(attachment);
+    }
+  };
+
   const waitForVisibleDropdown = (fieldId, label) => waitForCondition(() => {
     const dropdown = document.querySelector(`.select-infinite-scroll-${fieldId}`);
     if (!(dropdown instanceof HTMLElement)) {
@@ -683,6 +853,7 @@
       allowScroll: true,
       optionResolver: findBestVersionOption
     });
+    await attachDraftAttachments(payload.attachments);
   };
 
   const bootstrap = async () => {

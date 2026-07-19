@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>DAO Tools+ Stale License Report</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: #f8fafc;
+      color: #111827;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #f8fafc;
+    }
+
+    main {
+      width: min(1280px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 28px 0;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font: 700 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+
+    button:disabled {
+      cursor: default;
+      opacity: 0.62;
+    }
+
+    .primary-button {
+      background: #0f766e;
+      color: #fff;
+    }
+
+    .primary-button:hover:not(:disabled) {
+      background: #115e59;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.9fr) minmax(420px, 1.4fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      min-width: 0;
+      border: 1px solid #dbe3ea;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 62px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e2e8f0;
+      background: #f8fafc;
+    }
+
+    .panel-title {
+      color: #334155;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .panel-body {
+      padding: 18px;
+    }
+
+    .message-text {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: #111827;
+      font: 700 18px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+
+    .meta {
+      margin: 14px 0 0;
+      color: #64748b;
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .screenshot-panel .panel-body {
+      padding: 0;
+    }
+
+    .screenshot-panel .status {
+      padding: 0 18px 18px;
+    }
+
+    .screenshot {
+      display: block;
+      width: 100%;
+      max-height: calc(100vh - 180px);
+      object-fit: contain;
+      background: #0f172a;
+    }
+
+    .status {
+      min-height: 20px;
+      margin: 12px 0 0;
+      color: #0f766e;
+      font-size: 14px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .status.is-error {
+      color: #991b1b;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100vw - 24px, 720px);
+        padding: 18px 0;
+      }
+
+      .panel-header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      button {
+        width: 100%;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .screenshot {
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="layout" aria-live="polite">
+      <article class="panel message-panel">
+        <div class="panel-header">
+          <span class="panel-title">Повідомлення</span>
+          <button id="copy-text-button" class="primary-button" type="button">Копіювати текст</button>
+        </div>
+        <div class="panel-body">
+          <pre id="message-text" class="message-text"></pre>
+          <p id="meta" class="meta"></p>
+          <p id="text-status" class="status"></p>
+        </div>
+      </article>
+
+      <article class="panel screenshot-panel">
+        <div class="panel-header">
+          <span class="panel-title">Скріншот</span>
+        </div>
+        <div class="panel-body">
+          <img id="screenshot" class="screenshot" alt="Скріншот сторінки зайнятих ліцензій">
+        </div>
+        <p id="screenshot-status" class="status"></p>
+      </article>
+    </section>
+  </main>
+
+  <script src="stale-license-report.js"></script>
+</body>
+</html>

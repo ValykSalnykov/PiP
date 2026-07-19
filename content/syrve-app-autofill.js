@@ -101,7 +101,10 @@
 
   function requestSyrveCredentials() {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ action: 'GET_SYRVE_CREDENTIALS' }, (response) => {
+      chrome.runtime.sendMessage({
+        action: 'GET_SYRVE_CREDENTIALS',
+        requirePrepared: true
+      }, (response) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;

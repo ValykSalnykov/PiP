@@ -682,7 +682,7 @@
     const label = 'Пріоритет звернення';
     const normalizedValue = String(value || '').trim();
     if (!normalizedValue) {
-      throw new Error(`Немає значення для поля ${label}.`);
+      return;
     }
 
     const input = document.querySelector(`#ticket-custom-field-${fieldId}`);

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DAO Tools+",
-  "description": "Інструменти DAO для Planfix і Syrve: PiP на внутрішніх сторінках, автологін та перевірка серверів.",
-  "version": "1.5.1",
+  "description": "DAO Tools+ для Planfix/Syrve: автологін, ліцензії, PiP та заявки HelpDesk зі скріншотом.",
+  "version": "1.5.5",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "DAO Tools+",
@@ -94,6 +94,16 @@
       ],
       "js": [
         "content/syrve-connections-highlight.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://*/resto/service/maintance/groovy.jsp*",
+        "https://*/resto/service/maintance/groovy.jsp*"
+      ],
+      "js": [
+        "content/syrve-groovy-reset.js"
       ],
       "run_at": "document_idle"
     },

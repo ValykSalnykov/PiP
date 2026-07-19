@@ -19,6 +19,7 @@ const sendDataButton = document.getElementById("sendDataButton");
 const modeInfo = document.getElementById("modeInfo");
 const modeSelect = document.getElementById("modeSelect");
 const licenseDisplaySelect = document.getElementById("licenseDisplayMode");
+const staleLicenseThresholdInput = document.getElementById("staleLicenseThresholdMinutes");
 const showErrorButton = document.getElementById("showErrorButton");
 const errorMessage = document.getElementById("errorMessage");
 const errorCountBadge = document.getElementById("errorCountBadge");
@@ -44,6 +45,7 @@ const STORAGE_KEYS = {
   lastManualErrorRequestAt: "planfixLastManualErrorRequestAt",
   modeDescriptions: "modeDescriptions",
   licenseDisplayMode: "planfixLicenseDisplayMode",
+  staleLicenseThresholdMinutes: "syrveConnectionsStaleLicenseThresholdMinutes",
   taskHighlightEnabled: "pipTimeTrackerTaskHighlightEnabled",
   taskHighlightColor: "pipTimeTrackerTaskHighlightColor",
   taskOverdueBlinkEnabled: "pipTimeTrackerTaskOverdueBlinkEnabled"
@@ -71,6 +73,9 @@ const DEFAULT_TASK_HIGHLIGHT_SETTINGS = Object.freeze({
   color: "#2fd212",
   overdueBlinkEnabled: false
 });
+const DEFAULT_STALE_LICENSE_THRESHOLD_MINUTES = 20;
+const MIN_STALE_LICENSE_THRESHOLD_MINUTES = 1;
+const MAX_STALE_LICENSE_THRESHOLD_MINUTES = 1440;
 
 let popupAccessState = null;
 let isAccessSetupForced = false;
@@ -207,6 +212,39 @@ const persistLicenseDisplayMode = async (mode) => {
     [STORAGE_KEYS.licenseDisplayMode]: nextMode
   });
   return nextMode;
+};
+
+const normalizeStaleLicenseThresholdMinutes = (value) => {
+  const normalizedValue = Number(value);
+  if (!Number.isFinite(normalizedValue)) {
+    return DEFAULT_STALE_LICENSE_THRESHOLD_MINUTES;
+  }
+
+  const minutes = Math.floor(normalizedValue);
+  return minutes >= MIN_STALE_LICENSE_THRESHOLD_MINUTES && minutes <= MAX_STALE_LICENSE_THRESHOLD_MINUTES
+    ? minutes
+    : DEFAULT_STALE_LICENSE_THRESHOLD_MINUTES;
+};
+
+const getStoredStaleLicenseThresholdMinutes = (storageState = {}) => (
+  normalizeStaleLicenseThresholdMinutes(storageState[STORAGE_KEYS.staleLicenseThresholdMinutes])
+);
+
+const applyStaleLicenseThresholdState = (minutes) => {
+  if (!staleLicenseThresholdInput) {
+    return;
+  }
+
+  staleLicenseThresholdInput.value = String(normalizeStaleLicenseThresholdMinutes(minutes));
+};
+
+const persistStaleLicenseThresholdMinutes = async (minutes) => {
+  const nextMinutes = normalizeStaleLicenseThresholdMinutes(minutes);
+  applyStaleLicenseThresholdState(nextMinutes);
+  await storageSet({
+    [STORAGE_KEYS.staleLicenseThresholdMinutes]: nextMinutes
+  });
+  return nextMinutes;
 };
 
 const normalizeHexColor = (value, fallback = DEFAULT_TASK_HIGHLIGHT_SETTINGS.color) => {
@@ -1056,6 +1094,7 @@ const persistUserId = async () => {
     STORAGE_KEYS.lastManualErrorRequestAt,
     STORAGE_KEYS.modeDescriptions,
     STORAGE_KEYS.licenseDisplayMode,
+    STORAGE_KEYS.staleLicenseThresholdMinutes,
     STORAGE_KEYS.taskHighlightEnabled,
     STORAGE_KEYS.taskHighlightColor,
     STORAGE_KEYS.taskOverdueBlinkEnabled
@@ -1065,6 +1104,7 @@ const persistUserId = async () => {
   lastManualErrorRequestAt = Number(result[STORAGE_KEYS.lastManualErrorRequestAt]) || 0;
   knownModeDescriptions = getStoredModeDescriptions(result);
   const licenseDisplayMode = getStoredLicenseDisplayMode(result);
+  const staleLicenseThresholdMinutes = getStoredStaleLicenseThresholdMinutes(result);
   const highlightSettings = getTaskHighlightSettings(result);
 
   updateDaoServiceStatusUI(daoServiceStatus || { state: DAO_SERVICE_STATUS_STATES.checking });
@@ -1107,6 +1147,7 @@ const persistUserId = async () => {
 
   restoreServerContext(serverContext);
   applyLicenseDisplayModeState(licenseDisplayMode);
+  applyStaleLicenseThresholdState(staleLicenseThresholdMinutes);
   applyTaskHighlightSettingsState(highlightSettings);
   syncShowErrorButtonCooldownState();
 
@@ -1139,6 +1180,10 @@ taskOverdueBlinkToggle?.addEventListener("change", async () => {
 
 licenseDisplaySelect?.addEventListener("change", async () => {
   await persistLicenseDisplayMode(licenseDisplaySelect.value);
+});
+
+staleLicenseThresholdInput?.addEventListener("change", async () => {
+  await persistStaleLicenseThresholdMinutes(staleLicenseThresholdInput.value);
 });
 
 editClientBtn?.addEventListener("click", () => {
@@ -1501,4 +1546,3 @@ showErrorButton.addEventListener("click", async () => {
     setErrorMessage("Помилка при запиті.");
   }
 });
-

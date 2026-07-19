@@ -435,6 +435,7 @@ const DEVICES_BUTTON_ID = 'open-connections-button';
 const PERIOD_BUTTON_ID = 'get-period-button';
 const LOYALTY_BUTTON_ID = 'open-loyalty-button';
 const WEB_BUTTON_ID = 'open-server-web-url-button';
+const DIRECTORIES_BUTTON_ID = 'open-crm-directories-button';
 const API_BUTTON_ID = 'open-server-api-url-button';
 const HELPDESK_DRAFT_BUTTON_ID = 'open-helpdesk-draft-button';
 const CARD_BUTTON_TOOLTIP_ATTR = 'data-card-button-tooltip';
@@ -445,7 +446,8 @@ const CARD_BUTTON_DISABLED_MESSAGES = Object.freeze({
     serverExternalRequired: 'Потрібна зовнішня адреса сервера',
     serverInvalid: 'Некоректна адреса сервера',
     webMissing: 'Нема адреси вебу',
-    webInvalid: 'Некоректна адреса вебу'
+    webInvalid: 'Некоректна адреса вебу',
+    directoriesUnsupported: 'Потрібна адреса у форматі *.syrve.app'
 });
 const CARD_LICENSE_MODAL_ID = 'dao-license-check-modal';
 const CARD_LICENSE_MODAL_STYLE_ID = 'dao-license-check-modal-styles';
@@ -499,6 +501,7 @@ const CARD_BUTTON_INTENTS = {
     devices: 'devices',
     loyalty: 'loyalty',
     web: 'web',
+    directories: 'directories',
     api: 'api',
     period: 'period',
     helpdesk: 'helpdesk'
@@ -544,6 +547,12 @@ const CARD_BUTTON_THEME_TOKENS = {
             },
             web: {
                 background: '#0f766e',
+                color: '#fff',
+                border: '1px solid transparent',
+                boxShadow: 'none'
+            },
+            directories: {
+                background: '#b45309',
                 color: '#fff',
                 border: '1px solid transparent',
                 boxShadow: 'none'
@@ -612,6 +621,12 @@ const CARD_BUTTON_THEME_TOKENS = {
                 border: '1px solid rgba(45, 212, 191, 0.14)',
                 boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
             },
+            directories: {
+                background: 'rgba(146, 64, 14, 0.82)',
+                color: '#fffbeb',
+                border: '1px solid rgba(251, 191, 36, 0.16)',
+                boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3)'
+            },
             api: {
                 background: 'rgba(12, 74, 110, 0.8)',
                 color: '#e0f2fe',
@@ -647,7 +662,6 @@ const CARD_CLOUD_SUBSCRIPTION_LABELS = {
 };
 const SECURE_DEFAULT_PORT_DOMAINS = ['syrve.online', 'daocloud.it'];
 const CARD_HTTP_ONLY_DOMAINS = ['daocloud.fun'];
-const HELPDESK_DEFAULT_PRIORITY = 'Блокуюче';
 const HELPDESK_LT_NOTICE_TEXT = 'Сервер LT, прошу зауважити!';
 const HELPDESK_STALE_LICENSE_ISSUE_TITLE = 'Зависла ліцензія';
 const HELPDESK_QUICK_TITLE_OPTIONS = Object.freeze([
@@ -5197,23 +5211,114 @@ const buildBulkLicenseValiditySummary = (item) => {
     return '—';
 };
 
-const buildBulkLicenseDiffSummaryLabel = (diffSummary) => {
-    if (!diffSummary || typeof diffSummary !== 'object') {
+const resolveBulkLicenseSummaryCount = (value) => {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : 0;
+};
+
+const getBulkLicenseArrayCount = (value) => Array.isArray(value) ? value.length : 0;
+
+const buildBulkLicenseSnapshotKey = (license) => {
+    const id = String(license?.id || '').trim();
+    if (id) {
+        return `id:${id}`;
+    }
+
+    const name = String(license?.name || '').trim().toLowerCase();
+    if (name) {
+        return `name:${name}`;
+    }
+
+    const friendlyName = String(license?.friendlyName || '').trim().toLowerCase();
+    if (friendlyName) {
+        return `friendly:${friendlyName}`;
+    }
+
+    return '';
+};
+
+const buildBulkLicenseSnapshotMap = (licenses) => {
+    const licenseMap = new Map();
+    if (!Array.isArray(licenses)) {
+        return licenseMap;
+    }
+
+    licenses.forEach((license) => {
+        const key = buildBulkLicenseSnapshotKey(license);
+        if (key && !licenseMap.has(key)) {
+            licenseMap.set(key, license);
+        }
+    });
+
+    return licenseMap;
+};
+
+const normalizeBulkLicenseSnapshotValue = (value) => String(value ?? '').trim();
+
+const hasBulkLicenseSnapshotChange = (beforeLicense, afterLicense) => {
+    if (!beforeLicense || !afterLicense) {
+        return true;
+    }
+
+    return normalizeBulkLicenseSnapshotValue(beforeLicense.validUntil) !== normalizeBulkLicenseSnapshotValue(afterLicense.validUntil)
+        || normalizeBulkLicenseSnapshotValue(beforeLicense.count) !== normalizeBulkLicenseSnapshotValue(afterLicense.count);
+};
+
+const resolveBulkLicenseSnapshotChangedCount = (response) => {
+    const beforeLicenses = Array.isArray(response?.licensesBefore) ? response.licensesBefore : [];
+    const afterLicenses = Array.isArray(response?.licensesAfter) ? response.licensesAfter : [];
+
+    if (!beforeLicenses.length || !afterLicenses.length) {
+        return 0;
+    }
+
+    const beforeLicenseMap = buildBulkLicenseSnapshotMap(beforeLicenses);
+    return afterLicenses.reduce((count, afterLicense) => {
+        const key = buildBulkLicenseSnapshotKey(afterLicense);
+        const beforeLicense = key ? beforeLicenseMap.get(key) : null;
+        return hasBulkLicenseSnapshotChange(beforeLicense, afterLicense) ? count + 1 : count;
+    }, 0);
+};
+
+const resolveBulkLicenseUpdateCount = (response) => {
+    const snapshotChangedCount = resolveBulkLicenseSnapshotChangedCount(response);
+    if (snapshotChangedCount) {
+        return snapshotChangedCount;
+    }
+
+    return Math.max(
+        getBulkLicenseArrayCount(response?.updatedTargetLicenses),
+        resolveBulkLicenseSummaryCount(response?.diffSummary?.newLicenses),
+        resolveBulkLicenseSummaryCount(response?.diffSummary?.changedValidUntil),
+        resolveBulkLicenseSummaryCount(response?.diffSummary?.changedCount)
+    );
+};
+
+const resolveBulkLicenseUpdateTotalCount = (response, updatedCount) => {
+    const fullSnapshotCount = Math.max(
+        getBulkLicenseArrayCount(response?.licensesAfter),
+        getBulkLicenseArrayCount(response?.licensesBefore)
+    );
+    if (fullSnapshotCount) {
+        return Math.max(fullSnapshotCount, updatedCount);
+    }
+
+    return Math.max(
+        getBulkLicenseArrayCount(response?.targetLicenses),
+        getBulkLicenseArrayCount(response?.updatedTargetLicenses),
+        updatedCount
+    );
+};
+
+const buildBulkLicenseUpdateSummaryLabel = (response) => {
+    const updatedCount = resolveBulkLicenseUpdateCount(response);
+    const totalCount = resolveBulkLicenseUpdateTotalCount(response, updatedCount);
+
+    if (!updatedCount && !totalCount) {
         return '';
     }
 
-    const parts = [];
-    if ((diffSummary.newLicenses || 0) > 0) {
-        parts.push(`нових: ${diffSummary.newLicenses}`);
-    }
-    if ((diffSummary.changedValidUntil || 0) > 0) {
-        parts.push(`дат: ${diffSummary.changedValidUntil}`);
-    }
-    if ((diffSummary.changedCount || 0) > 0) {
-        parts.push(`кількості: ${diffSummary.changedCount}`);
-    }
-
-    return parts.join(' • ');
+    return `Обновлено: ${updatedCount} из ${totalCount || updatedCount}`;
 };
 
 const resolveBulkLicenseValidityFromLicenses = (licenses, keyName) => {
@@ -5540,11 +5645,6 @@ const buildBulkLicenseUpdateDetails = (response) => {
         return response.statusMessage;
     }
 
-    const diffSummaryLabel = buildBulkLicenseDiffSummaryLabel(response?.diffSummary);
-    if (diffSummaryLabel) {
-        return diffSummaryLabel;
-    }
-
     if (response?.resultCode === 'UPDATED_NOT_CONFIRMED' && resolveBulkLicenseUpdateValiditySummary(response)) {
         return 'Показано останній підтверджений термін.';
     }
@@ -5566,7 +5666,7 @@ const applyBulkLicenseUpdateItemResult = (item, response) => {
     });
     item.details = buildBulkLicenseUpdateDetails(response);
     item.validitySummary = resolveBulkLicenseUpdateValiditySummary(response);
-    item.diffSummaryLabel = buildBulkLicenseDiffSummaryLabel(response?.diffSummary);
+    item.diffSummaryLabel = buildBulkLicenseUpdateSummaryLabel(response);
     item.serverSnapshot = resolveBulkLicenseUpdateServerSnapshot(response);
     item.licenseSnapshot = resolveBulkLicenseUpdateLicenseSnapshot(response);
     item.targetBefore = response?.targetBefore && typeof response.targetBefore === 'object' ? response.targetBefore : null;
@@ -6191,7 +6291,7 @@ const readSendDataResponseMessage = async (response) => {
         // Функція для обробки елемента довідника
         const processElement = async () => {
             const field72ValueElement = await waitForElement(
-                "body > main > div.body-container > div > div.page-layout-block.handbook-card-container.page-layout-block-gray.b-last-block > div.b-main-block-content > div.baron_wrapper.baron_wrapper_scroll_redirect > div > div.b-main-block.baron_container > div > div > div > div > div > div > div > div:nth-child(5) > div > div > div > div > div > div > div > div.object-edit-field-bottom-panel-rc__wrapper-box > div > div.view > div > span"
+                '.field-target[f-id="72"] .ObjectEditFieldBase__view__value__text'
             );
             const scopeRoot = field72ValueElement.closest('.g-popup-win-scroll-content, .page-layout-block.handbook-card-container, .object-edit-win-target, .object-edit-win-location-field')
                 || document;
@@ -6249,23 +6349,6 @@ const readSendDataResponseMessage = async (response) => {
 
             // Перевіряємо, чи кнопка вже створена
             if (!document.querySelector("#send-data-button")) {
-                // Створюємо обгортку для тексту і кнопки
-                const wrapper = document.createElement('div');
-                wrapper.style.display = "flex";
-                wrapper.style.alignItems = "center";
-                wrapper.style.gap = "10px";
-
-                const serverInfo = document.createElement('span');
-                serverInfo.style.display = 'inline-flex';
-                serverInfo.style.alignItems = 'center';
-                serverInfo.style.gap = '6px';
-                serverInfo.style.minWidth = '0';
-
-                // Переміщуємо текстовий елемент у нову обгортку
-                field72ValueElement.parentElement.insertBefore(wrapper, field72ValueElement);
-                wrapper.appendChild(serverInfo);
-                serverInfo.appendChild(field72ValueElement);
-
                 // Створюємо кнопку
                 const button = document.createElement('button');
                 button.id = "send-data-button";
@@ -6317,8 +6400,10 @@ const readSendDataResponseMessage = async (response) => {
                     syncCardLoginButtonWidth(button);
                 });
 
-                // Додаємо кнопку до обгортки
-                wrapper.appendChild(button);
+                // Додаємо кнопку поруч зі значенням сервера та індикатором доступності.
+                const serverInlineContainer = ensureCardServerInlineContainer(field72ValueElement)
+                    || field72ValueElement.parentElement;
+                serverInlineContainer.appendChild(button);
                 ensureCardLoginButtonContent();
                 syncCardLoginButtonWidth(button);
                 resetCardLoginStatus();
@@ -7162,6 +7247,10 @@ const readSendDataResponseMessage = async (response) => {
                 actionDisabled: false,
                 tooltip: ''
             },
+            [DIRECTORIES_BUTTON_ID]: {
+                actionDisabled: false,
+                tooltip: ''
+            },
             [API_BUTTON_ID]: {
                 actionDisabled: false,
                 tooltip: ''
@@ -7170,6 +7259,10 @@ const readSendDataResponseMessage = async (response) => {
 
         if (!hasWebValue) {
             availability[WEB_BUTTON_ID] = {
+                actionDisabled: true,
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webMissing
+            };
+            availability[DIRECTORIES_BUTTON_ID] = {
                 actionDisabled: true,
                 tooltip: CARD_BUTTON_DISABLED_MESSAGES.webMissing
             };
@@ -7192,16 +7285,26 @@ const readSendDataResponseMessage = async (response) => {
                 actionDisabled: true,
                 tooltip: CARD_BUTTON_DISABLED_MESSAGES.webInvalid
             };
-            return availability;
         }
 
         try {
-            buildCardApiUrl(normalizedWebUrl);
+            buildCrmHandoffSyrveWebHost(rawWebUrl);
         } catch (error) {
-            availability[API_BUTTON_ID] = {
+            availability[DIRECTORIES_BUTTON_ID] = {
                 actionDisabled: true,
-                tooltip: CARD_BUTTON_DISABLED_MESSAGES.webInvalid
+                tooltip: CARD_BUTTON_DISABLED_MESSAGES.directoriesUnsupported
             };
+        }
+
+        if (normalizedWebUrl) {
+            try {
+                buildCardApiUrl(normalizedWebUrl);
+            } catch (error) {
+                availability[API_BUTTON_ID] = {
+                    actionDisabled: true,
+                    tooltip: CARD_BUTTON_DISABLED_MESSAGES.webInvalid
+                };
+            }
         }
 
         return availability;
@@ -7236,7 +7339,7 @@ const readSendDataResponseMessage = async (response) => {
 
         const availability = buildCardActionButtonAvailability(scopeRoot);
 
-        [LICENSE_BUTTON_ID, RESTO_BUTTON_ID, DEVICES_BUTTON_ID, PERIOD_BUTTON_ID, LOYALTY_BUTTON_ID, WEB_BUTTON_ID, API_BUTTON_ID].forEach((buttonId) => {
+        [LICENSE_BUTTON_ID, RESTO_BUTTON_ID, DEVICES_BUTTON_ID, PERIOD_BUTTON_ID, LOYALTY_BUTTON_ID, WEB_BUTTON_ID, DIRECTORIES_BUTTON_ID, API_BUTTON_ID].forEach((buttonId) => {
             const button = container.querySelector(`#${buttonId}`);
             if (!(button instanceof HTMLButtonElement)) {
                 return;
@@ -7271,6 +7374,37 @@ const readSendDataResponseMessage = async (response) => {
         const parsedWebUrl = new URL(normalizedWebUrl);
 
         return new URL(CARD_API_PATH, `${parsedWebUrl.origin}/`).toString();
+    };
+
+    const buildCrmHandoffSyrveWebHost = (webUrl) => {
+        const normalizedValue = String(webUrl || '').trim();
+        let parsedWebUrl;
+
+        try {
+            parsedWebUrl = new URL(
+                normalizedValue.includes('://') ? normalizedValue : `https://${normalizedValue}`
+            );
+        } catch (error) {
+            throw new Error('Для переходу в довідники потрібна адреса у форматі 867-404-806.syrve.app.');
+        }
+
+        const hostname = parsedWebUrl.hostname.toLowerCase();
+
+        if (
+            parsedWebUrl.protocol !== 'https:'
+            || hostname === 'syrve.app'
+            || !hostname.endsWith('.syrve.app')
+            || parsedWebUrl.username
+            || parsedWebUrl.password
+            || parsedWebUrl.search
+            || parsedWebUrl.hash
+            || (parsedWebUrl.pathname && parsedWebUrl.pathname !== '/')
+            || (parsedWebUrl.port && parsedWebUrl.port !== '443')
+        ) {
+            throw new Error('Для переходу в довідники потрібна адреса у форматі 867-404-806.syrve.app.');
+        }
+
+        return hostname;
     };
 
     const formatHelpDeskDraftTitle = (restaurantName, issueTitle) => `${restaurantName || '—'}: ${issueTitle || '(...)'}`;
@@ -7312,7 +7446,6 @@ const readSendDataResponseMessage = async (response) => {
         const payload = {
             taskUrl,
             externalNumber: taskUrl,
-            priority: HELPDESK_DEFAULT_PRIORITY,
             title: '',
             issueTitle: normalizedIssueTitle,
             restaurantName,
@@ -7622,6 +7755,25 @@ const readSendDataResponseMessage = async (response) => {
         });
     });
 
+    const openCrmDirectories = ({ syrveWebUrl }) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+            action: 'OPEN_CRM_HANDOFF',
+            syrveWebUrl
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+
+            if (!response?.ok) {
+                reject(new Error(response?.error || 'Невідома помилка переходу в довідники.'));
+                return;
+            }
+
+            resolve(response);
+        });
+    });
+
     const createRestoBtn = (scopeRoot) => {
         const btn = document.createElement('button');
         btn.id = RESTO_BUTTON_ID;
@@ -7859,6 +8011,70 @@ const readSendDataResponseMessage = async (response) => {
             } catch (error) {
                 console.error('Не вдалося відкрити веб-адресу сервера:', error);
                 setCardErrorMessage(error?.message || 'Не вдалося відкрити веб-адресу сервера.');
+            } finally {
+                setCardActionButtonLoading(btn, false);
+            }
+        });
+
+        return btn;
+    };
+
+    const createDirectoriesBtn = (scopeRoot) => {
+        const btn = document.createElement('button');
+        btn.id = DIRECTORIES_BUTTON_ID;
+        btn.type = 'button';
+        btn.dataset.cardButtonIntent = CARD_BUTTON_INTENTS.directories;
+        btn.textContent = 'Довідники';
+        btn.style.cssText = `
+            margin-left: 8px;
+            cursor: pointer;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            font-weight: 600;
+            font-size: 13px;
+            background: #b45309;
+            color: #fff;
+            transition: opacity 0.2s ease;
+            white-space: nowrap;
+        `;
+
+        btn.addEventListener('mouseenter', () => {
+            if (canUseCardActionButtonHover(btn)) {
+                btn.style.opacity = '0.82';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            syncCardActionButtonInteractivity(btn);
+        });
+        btn.addEventListener('click', async () => {
+            if (isCardActionButtonActionDisabled(btn)) {
+                return;
+            }
+
+            const currentScopeRoot = getCardScopeRoot(btn) || scopeRoot;
+            let syrveWebUrl;
+
+            try {
+                syrveWebUrl = buildCrmHandoffSyrveWebHost(getCardWebUrl(currentScopeRoot));
+            } catch (error) {
+                invalidateCardErrorPolling();
+                clearCardErrorMessage();
+                setCardErrorMessage(error?.message || 'Не вдалося підготувати адресу для переходу в довідники.');
+                return;
+            }
+
+            invalidateCardErrorPolling();
+            clearCardErrorMessage();
+            setCardActionButtonLoading(btn, true, 'Відкриваю...');
+
+            try {
+                await openCrmDirectories({
+                    syrveWebUrl
+                });
+            } catch (error) {
+                console.error('Не вдалося відкрити довідники:', error);
+                setCardErrorMessage(error?.message || 'Не вдалося відкрити довідники.');
             } finally {
                 setCardActionButtonLoading(btn, false);
             }
@@ -8108,6 +8324,7 @@ const readSendDataResponseMessage = async (response) => {
             container.appendChild(createPeriodBtn(scopeRoot));
             container.appendChild(createLoyaltyBtn(scopeRoot));
             container.appendChild(createWebBtn(scopeRoot));
+            container.appendChild(createDirectoriesBtn(scopeRoot));
             container.appendChild(createApiBtn(scopeRoot));
             if (isTaskPage()) {
                 container.appendChild(createHelpDeskDraftBtn(scopeRoot));
@@ -8139,6 +8356,7 @@ const readSendDataResponseMessage = async (response) => {
         }
 
         const existingWebButton = container.querySelector(`#${WEB_BUTTON_ID}`);
+        const existingDirectoriesButton = container.querySelector(`#${DIRECTORIES_BUTTON_ID}`);
         const existingApiButton = container.querySelector(`#${API_BUTTON_ID}`);
         if (!existingWebButton) {
             const loyaltyBtn = container.querySelector(`#${LOYALTY_BUTTON_ID}`);
@@ -8150,11 +8368,21 @@ const readSendDataResponseMessage = async (response) => {
             }
         }
 
-        if (!existingApiButton) {
+        if (!existingDirectoriesButton) {
             const webBtn = container.querySelector(`#${WEB_BUTTON_ID}`);
-            const apiBtn = createApiBtn(scopeRoot);
+            const directoriesBtn = createDirectoriesBtn(scopeRoot);
             if (webBtn?.nextSibling) {
-                container.insertBefore(apiBtn, webBtn.nextSibling);
+                container.insertBefore(directoriesBtn, webBtn.nextSibling);
+            } else {
+                container.appendChild(directoriesBtn);
+            }
+        }
+
+        if (!existingApiButton) {
+            const directoriesBtn = container.querySelector(`#${DIRECTORIES_BUTTON_ID}`);
+            const apiBtn = createApiBtn(scopeRoot);
+            if (directoriesBtn?.nextSibling) {
+                container.insertBefore(apiBtn, directoriesBtn.nextSibling);
             } else {
                 container.appendChild(apiBtn);
             }
